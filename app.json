@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Discordia",
+    "slug": "discordia-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "discordia",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.discordia.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0A1620"
+      },
+      "package": "com.discordia.app"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-asset"
+    ]
+  }
+}

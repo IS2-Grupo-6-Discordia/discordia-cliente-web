@@ -1,0 +1,22 @@
+# dependencias
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+
+# variables de entorno (cada quien tiene su propio .env local)
+.env
+.env.local
+.env.*.local
+
+# macOS
+.DS_Store
+
+# logs
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+

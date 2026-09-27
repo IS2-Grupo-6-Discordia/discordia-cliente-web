@@ -1,7 +1,7 @@
 import { api } from "./client"
 import type { Server, Category, RoleGroup } from "./types"
 
-const USE_MOCK = !process.env.EXPO_PUBLIC_API_URL
+const USE_MOCK = true
 
 const MOCK_SERVERS: Server[] = [
   { id: "1", name: "FIUBA · IS2", abbr: "FI", color: "#37D6C0", mention: 2 },

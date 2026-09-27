@@ -129,7 +129,7 @@ export default function RecoveryScreen() {
               </TouchableOpacity>
 
               <TouchableOpacity
-                onPress={() => router.back()}
+                onPress={() => router.replace("/(auth)/login")}
                 style={{ marginTop: 16, alignItems: "center" }}
               >
                 <Text style={{ color: "#8DA8AC", fontSize: 12 }}>

@@ -1,0 +1,44 @@
+{
+  "name": "discordia-app",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~4.0.1",
+    "@expo/vector-icons": "^14.0.0",
+    "@react-native-async-storage/async-storage": "~2.1.0",
+    "expo": "~52.0.0",
+    "expo-asset": "~11.0.5",
+    "expo-constants": "~17.0.0",
+    "expo-font": "~13.0.0",
+    "expo-linking": "~7.0.0",
+    "expo-router": "~4.0.0",
+    "expo-status-bar": "~2.0.0",
+    "nativewind": "^4.0.36",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-native": "0.76.6",
+    "react-native-safe-area-context": "~4.14.0",
+    "react-native-screens": "~4.4.0",
+    "react-native-web": "~0.19.13"
+  },
+  "devDependencies": {
+    "@types/react": "~18.3.0",
+    "tailwindcss": "3.3.2",
+    "typescript": "~5.3.0"
+  },
+  "private": true,
+  "overrides": {
+    "react-native-css-interop": {
+      "react-native": "0.76.6"
+    },
+    "metro": "0.81.5",
+    "metro-config": "0.81.5",
+    "metro-transform-worker": "0.81.5"
+  }
+}

@@ -1,7 +1,7 @@
 import { api } from "./client"
 import type { Message } from "./types"
 
-const USE_MOCK = !process.env.EXPO_PUBLIC_API_URL
+const USE_MOCK = true
 
 const MOCK_MESSAGES: Message[] = [
   {

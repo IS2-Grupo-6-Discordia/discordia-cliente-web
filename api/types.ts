@@ -3,6 +3,8 @@ export interface User {
   name: string
   email: string
   avatar: string
+  bio?: string | null
+  createdAt?: string
 }
 
 export interface AuthResponse {

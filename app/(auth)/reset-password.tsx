@@ -2,7 +2,6 @@ import { useState } from "react"
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   ScrollView,
   KeyboardAvoidingView,
@@ -11,6 +10,8 @@ import {
 import { useRouter, useLocalSearchParams } from "expo-router"
 import { confirmPasswordReset } from "@/api/auth"
 import { friendlyError } from "@/api/client"
+import AuthBrand from "@/components/AuthBrand"
+import AuthField from "@/components/AuthField"
 
 function Req({ met, text }: { met: boolean; text: string }) {
   return (
@@ -34,37 +35,17 @@ function Req({ met, text }: { met: boolean; text: string }) {
   )
 }
 
-// Brand header shared by every state of this screen.
-function Brand() {
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 20 }}>
-      <View style={{ width: 28, height: 28, borderRadius: 9999, backgroundColor: "#37D6C0", alignItems: "center", justifyContent: "center" }}>
-        <Text style={{ color: "#04211D", fontWeight: "900", fontSize: 14 }}>D</Text>
-      </View>
-      <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 16 }}>Discordia</Text>
-    </View>
-  )
-}
-
-const labelStyle = {
-  color: "#8DA8AC",
-  fontSize: 10,
-  fontWeight: "600" as const,
-  textTransform: "uppercase" as const,
-  letterSpacing: 1.1,
-  marginBottom: 4,
-}
-
-const inputBaseStyle = {
-  width: "100%" as const,
-  borderRadius: 12,
+const NOTICE_ERROR = {
+  flexDirection: "row" as const,
+  alignItems: "flex-start" as const,
+  gap: 8,
   paddingHorizontal: 12,
   paddingVertical: 10,
-  color: "#E6F3F3",
-  fontSize: 14,
-  backgroundColor: "rgba(255,255,255,0.10)",
+  borderRadius: 10,
+  marginBottom: 14,
+  backgroundColor: "rgba(255,127,114,0.12)",
   borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.13)",
+  borderColor: "rgba(255,127,114,0.30)",
 }
 
 export default function ResetPasswordScreen() {
@@ -127,7 +108,6 @@ export default function ResetPasswordScreen() {
             borderColor: "rgba(255,255,255,0.13)",
           }}
         >
-          <Brand />
           {children}
         </View>
       </ScrollView>
@@ -138,18 +118,16 @@ export default function ResetPasswordScreen() {
   if (!token) {
     return (
       <Card>
-        <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 20, marginBottom: 4 }}>
-          Enlace no válido
-        </Text>
-        <Text style={{ color: "#8DA8AC", fontSize: 12, marginBottom: 16, lineHeight: 20 }}>
-          El enlace no es válido o está incompleto. Pedí uno nuevo.
-        </Text>
+        <AuthBrand
+          title="Enlace no válido"
+          subtitle="El enlace no es válido o está incompleto. Pedí uno nuevo."
+        />
         <TouchableOpacity
           onPress={() => router.replace("/(auth)/recovery")}
           style={{
             width: "100%",
-            borderRadius: 12,
-            paddingVertical: 12,
+            borderRadius: 10,
+            paddingVertical: 13,
             alignItems: "center",
             backgroundColor: "#37D6C0",
           }}
@@ -172,18 +150,16 @@ export default function ResetPasswordScreen() {
   if (done) {
     return (
       <Card>
-        <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 20, marginBottom: 4 }}>
-          ¡Listo! Tu contraseña se actualizó.
-        </Text>
-        <Text style={{ color: "#8DA8AC", fontSize: 12, marginBottom: 16, lineHeight: 20 }}>
-          Ya podés iniciar sesión con tu nueva contraseña.
-        </Text>
+        <AuthBrand
+          title="¡Listo!"
+          subtitle="Tu contraseña se actualizó. Ya podés iniciar sesión con la nueva."
+        />
         <TouchableOpacity
           onPress={() => router.replace("/(auth)/login")}
           style={{
             width: "100%",
-            borderRadius: 12,
-            paddingVertical: 12,
+            borderRadius: 10,
+            paddingVertical: 13,
             alignItems: "center",
             backgroundColor: "#37D6C0",
           }}
@@ -197,41 +173,22 @@ export default function ResetPasswordScreen() {
   // Main form: choose and confirm a new password.
   return (
     <Card>
-      <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 20, marginBottom: 4 }}>
-        Nueva contraseña
-      </Text>
-      <Text style={{ color: "#8DA8AC", fontSize: 12, marginBottom: 16, lineHeight: 20 }}>
-        Elegí una contraseña nueva para tu cuenta.
-      </Text>
+      <AuthBrand title="Nueva contraseña" subtitle="Elegí una contraseña nueva para tu cuenta." />
 
       {error ? (
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "flex-start",
-            gap: 8,
-            padding: 10,
-            borderRadius: 12,
-            marginBottom: 12,
-            backgroundColor: "rgba(255,127,114,0.15)",
-            borderWidth: 1,
-            borderColor: "#FF7F72",
-          }}
-        >
-          <Text style={{ color: "#FF7F72", fontWeight: "700" }}>!</Text>
-          <Text style={{ color: "#FF7F72", fontSize: 12, flex: 1 }}>{error}</Text>
+        <View style={NOTICE_ERROR}>
+          <Text style={{ color: "#FF9E94", fontWeight: "700" }}>!</Text>
+          <Text style={{ color: "#FF9E94", fontSize: 12.5, flex: 1 }}>{error}</Text>
         </View>
       ) : null}
 
-      {/* New password */}
-      <Text style={labelStyle}>Nueva contraseña</Text>
-      <TextInput
+      <AuthField
+        label="Nueva contraseña"
         value={pw}
         onChangeText={setPw}
         placeholder="Mínimo 8 caracteres"
-        placeholderTextColor="#5E7E82"
         secureTextEntry
-        style={{ ...inputBaseStyle, marginBottom: 8 }}
+        containerStyle={{ marginBottom: 8 }}
       />
 
       {/* Password strength */}
@@ -265,18 +222,14 @@ export default function ResetPasswordScreen() {
       )}
 
       {/* Confirm password */}
-      <Text style={{ ...labelStyle, marginTop: pw.length > 0 ? 0 : 12 }}>Confirmar contraseña</Text>
-      <TextInput
+      <AuthField
+        label="Confirmar contraseña"
         value={confirm}
         onChangeText={setConfirm}
         placeholder="Repetí la contraseña"
-        placeholderTextColor="#5E7E82"
         secureTextEntry
-        style={{
-          ...inputBaseStyle,
-          marginBottom: mismatch ? 4 : 8,
-          borderColor: mismatch ? "#FF7F72" : "rgba(255,255,255,0.13)",
-        }}
+        error={mismatch}
+        containerStyle={{ marginTop: pw.length > 0 ? 0 : 12, marginBottom: mismatch ? 4 : 8 }}
       />
       {mismatch ? (
         <Text style={{ color: "#FF7F72", fontSize: 11, marginBottom: 8 }}>
@@ -290,10 +243,10 @@ export default function ResetPasswordScreen() {
         disabled={loading || !canSubmit}
         style={{
           width: "100%",
-          borderRadius: 12,
-          paddingVertical: 12,
+          borderRadius: 10,
+          paddingVertical: 13,
           alignItems: "center",
-          marginTop: 4,
+          marginTop: 6,
           backgroundColor: canSubmit ? "#37D6C0" : "rgba(255,255,255,0.15)",
         }}
       >

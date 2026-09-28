@@ -7,13 +7,15 @@ const READ_USE_MOCK = true
 // Writes hit the real backend whenever an API URL is configured.
 const WRITE_USE_MOCK = !process.env.EXPO_PUBLIC_API_URL
 
+// The single example server. Everything else the user sees in the rail is a
+// server they created or joined.
+export const MOCK_SERVER_ID = "1"
+
 const MOCK_SERVERS: Server[] = [
-  { id: "1", name: "FIUBA · IS2", abbr: "FI", color: "#37D6C0", mention: 2 },
-  { id: "2", name: "IS2 Proyecto", abbr: "IS2", color: "#FF7F72", unread: true },
-  { id: "3", name: "TP Final", abbr: "TP", color: "#4FD69C" },
-  { id: "4", name: "Algoritmos", abbr: "AM", color: "#F0C24B", unread: true },
+  { id: MOCK_SERVER_ID, name: "FIUBA · IS2", abbr: "FI", color: "#37D6C0", mention: 2 },
 ]
 
+// Channels + demo messages only belong to the example server.
 const MOCK_CATEGORIES: Category[] = [
   {
     id: "general",
@@ -34,6 +36,24 @@ const MOCK_CATEGORIES: Category[] = [
     ],
   },
 ]
+
+// A fresh, empty starter layout for any server the user creates or joins.
+// Channel ids are namespaced per server so their messages never collide with
+// (or inherit from) the example server or another new server.
+function starterCategories(serverId: string): Category[] {
+  return [
+    {
+      id: `${serverId}:cat-general`,
+      name: "General",
+      channels: [{ id: `${serverId}:general`, name: "general", type: "text" }],
+    },
+    {
+      id: `${serverId}:cat-voz`,
+      name: "Voz",
+      channels: [{ id: `${serverId}:sala-1`, name: "Sala 1", type: "voice" }],
+    },
+  ]
+}
 
 const MOCK_ROLES: RoleGroup[] = [
   {
@@ -68,12 +88,18 @@ export async function getServers(): Promise<Server[]> {
 }
 
 export async function getCategories(serverId: string): Promise<Category[]> {
-  if (READ_USE_MOCK) return MOCK_CATEGORIES
+  if (READ_USE_MOCK) {
+    return serverId === MOCK_SERVER_ID ? MOCK_CATEGORIES : starterCategories(serverId)
+  }
   return api<Category[]>(`/servers/${serverId}/categories`)
 }
 
 export async function getRoles(serverId: string): Promise<RoleGroup[]> {
-  if (READ_USE_MOCK) return MOCK_ROLES
+  // Only the example server ships with demo members. Servers the user makes or
+  // joins start without a roster so they don't look pre-populated.
+  if (READ_USE_MOCK) {
+    return serverId === MOCK_SERVER_ID ? MOCK_ROLES : []
+  }
   return api<RoleGroup[]>(`/servers/${serverId}/roles`)
 }
 

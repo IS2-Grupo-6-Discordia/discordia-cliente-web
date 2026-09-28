@@ -10,6 +10,7 @@ import {
   Platform,
 } from "react-native"
 import { useRouter } from "expo-router"
+import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
 import { login } from "@/api/auth"
 import { friendlyError } from "@/api/client"
@@ -21,6 +22,25 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
+  const [focused, setFocused] = useState<"email" | "password" | null>(null)
+  const [remember, setRemember] = useState(true)
+
+  // Field styling with a teal focus ring, so inputs react to interaction.
+  const fieldStyle = (name: "email" | "password") => ({
+    width: "100%" as const,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    color: "#E6F3F3",
+    fontSize: 14,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: error
+      ? "#FF7F72"
+      : focused === name
+        ? "#37D6C0"
+        : "rgba(255,255,255,0.10)",
+  })
 
   const handleLogin = async () => {
     setLoading(true)
@@ -58,18 +78,30 @@ export default function LoginScreen() {
           }}
         >
           {/* Brand */}
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 20 }}>
-            <View style={{ width: 28, height: 28, borderRadius: 9999, backgroundColor: "#37D6C0", alignItems: "center", justifyContent: "center" }}>
-              <Text style={{ color: "#04211D", fontWeight: "900", fontSize: 14 }}>D</Text>
+          <View style={{ alignItems: "center", marginBottom: 22 }}>
+            <View
+              style={{
+                width: 48,
+                height: 48,
+                borderRadius: 14,
+                backgroundColor: "#37D6C0",
+                alignItems: "center",
+                justifyContent: "center",
+                marginBottom: 14,
+                ...(Platform.OS === "web"
+                  ? ({ boxShadow: "0 8px 24px -6px rgba(55,214,192,0.6)" } as object)
+                  : {}),
+              }}
+            >
+              <Text style={{ color: "#04211D", fontWeight: "900", fontSize: 24 }}>D</Text>
             </View>
-            <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 16 }}>Discordia</Text>
+            <Text style={{ color: "#F2FAFA", fontWeight: "800", fontSize: 22, letterSpacing: -0.3 }}>
+              Entrá a tu cuenta
+            </Text>
+            <Text style={{ color: "#8DA8AC", fontSize: 12.5, marginTop: 6, textAlign: "center", lineHeight: 18 }}>
+              Tus servidores, canales y llamadas siguen donde los dejaste.
+            </Text>
           </View>
-
-          {/* Header */}
-          <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 20, marginBottom: 4 }}>Entrá a tu cuenta</Text>
-          <Text style={{ color: "#8DA8AC", fontSize: 12, marginBottom: 16 }}>
-            Tus servidores, canales y llamadas siguen donde los dejaste.
-          </Text>
 
           {/* Error */}
           {error ? (
@@ -98,22 +130,13 @@ export default function LoginScreen() {
           <TextInput
             value={email}
             onChangeText={setEmail}
+            onFocus={() => setFocused("email")}
+            onBlur={() => setFocused(null)}
             placeholder="vos@ejemplo.com"
             placeholderTextColor="#5E7E82"
             keyboardType="email-address"
             autoCapitalize="none"
-            style={{
-              width: "100%",
-              borderRadius: 12,
-              paddingHorizontal: 12,
-              paddingVertical: 10,
-              color: "#E6F3F3",
-              fontSize: 14,
-              marginBottom: 12,
-              backgroundColor: "rgba(255,255,255,0.10)",
-              borderWidth: 1,
-              borderColor: error ? "#FF7F72" : "rgba(255,255,255,0.13)",
-            }}
+            style={{ ...fieldStyle("email"), marginBottom: 14 }}
           />
 
           {/* Password */}
@@ -123,26 +146,36 @@ export default function LoginScreen() {
           <TextInput
             value={password}
             onChangeText={setPassword}
+            onFocus={() => setFocused("password")}
+            onBlur={() => setFocused(null)}
             placeholder="••••••••"
             placeholderTextColor="#5E7E82"
             secureTextEntry
-            style={{
-              width: "100%",
-              borderRadius: 12,
-              paddingHorizontal: 12,
-              paddingVertical: 10,
-              color: "#E6F3F3",
-              fontSize: 14,
-              marginBottom: 8,
-              backgroundColor: "rgba(255,255,255,0.10)",
-              borderWidth: 1,
-              borderColor: error ? "#FF7F72" : "rgba(255,255,255,0.13)",
-            }}
+            style={{ ...fieldStyle("password"), marginBottom: 12 }}
           />
 
-          {/* Forgot password */}
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-            <Text style={{ color: "#8DA8AC", fontSize: 12 }}>Mantener la sesión</Text>
+          {/* Remember + forgot password */}
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+            <TouchableOpacity
+              onPress={() => setRemember((v) => !v)}
+              style={{ flexDirection: "row", alignItems: "center", gap: 7 }}
+            >
+              <View
+                style={{
+                  width: 17,
+                  height: 17,
+                  borderRadius: 5,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: remember ? "#37D6C0" : "transparent",
+                  borderWidth: 1,
+                  borderColor: remember ? "#37D6C0" : "rgba(255,255,255,0.20)",
+                }}
+              >
+                {remember ? <Ionicons name="checkmark" size={12} color="#04211D" /> : null}
+              </View>
+              <Text style={{ color: "#8DA8AC", fontSize: 12 }}>Mantener la sesión</Text>
+            </TouchableOpacity>
             <TouchableOpacity onPress={() => router.push("/(auth)/recovery")}>
               <Text style={{ color: "#37D6C0", fontSize: 12, fontWeight: "600" }}>
                 ¿Olvidaste tu contraseña?
@@ -156,8 +189,8 @@ export default function LoginScreen() {
             disabled={loading}
             style={{
               width: "100%",
-              borderRadius: 12,
-              paddingVertical: 12,
+              borderRadius: 10,
+              paddingVertical: 13,
               alignItems: "center",
               justifyContent: "center",
               flexDirection: "row",
@@ -186,18 +219,19 @@ export default function LoginScreen() {
           <TouchableOpacity
             style={{
               width: "100%",
-              borderRadius: 12,
-              paddingVertical: 12,
+              borderRadius: 10,
+              paddingVertical: 13,
               flexDirection: "row",
               alignItems: "center",
               justifyContent: "center",
               gap: 8,
               borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.13)",
+              borderColor: "rgba(255,255,255,0.10)",
+              backgroundColor: "rgba(255,255,255,0.04)",
             }}
           >
-            <View style={{ width: 16, height: 16, borderRadius: 9999, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}>
-              <Text style={{ color: "#E6F3F3", fontSize: 10, fontWeight: "800" }}>G</Text>
+            <View style={{ width: 18, height: 18, borderRadius: 9999, backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center" }}>
+              <Text style={{ color: "#1A1A1A", fontSize: 11, fontWeight: "900" }}>G</Text>
             </View>
             <Text style={{ color: "#E6F3F3", fontWeight: "600", fontSize: 14 }}>Continuar con Google</Text>
           </TouchableOpacity>

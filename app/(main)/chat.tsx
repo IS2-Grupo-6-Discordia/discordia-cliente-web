@@ -6,10 +6,11 @@ import {
   TouchableOpacity,
   ScrollView,
   FlatList,
-  Modal,
   Platform,
   ActivityIndicator,
+  Image,
 } from "react-native"
+import type { ViewStyle, TextStyle } from "react-native"
 import * as ImagePicker from "expo-image-picker"
 import * as Clipboard from "expo-clipboard"
 import {
@@ -25,8 +26,10 @@ import {
 } from "@/api"
 import type { Server, Category, RoleGroup, Message, Invite } from "@/api/types"
 import { ApiError, friendlyError } from "@/api/client"
+import { Ionicons } from "@expo/vector-icons"
 import Avatar from "@/components/Avatar"
 import StatusDot from "@/components/StatusDot"
+import ModalShell from "@/components/ModalShell"
 
 const SERVER_NAME_MAX = 100
 
@@ -42,11 +45,72 @@ function isRealServerId(id: string): boolean {
 const MOCK_SERVER_NOTICE =
   "Este es un servidor de ejemplo. Creá o unite a un servidor real para usar esta acción."
 
+// Shared control tokens so every modal speaks the same visual language:
+// one radius scale (controls at 10), one field treatment, one primary button.
+const LABEL: TextStyle = {
+  color: "#8DA8AC",
+  fontSize: 10,
+  fontWeight: "600",
+  textTransform: "uppercase",
+  letterSpacing: 1.1,
+  marginBottom: 6,
+}
+const FIELD: TextStyle = {
+  width: "100%",
+  borderRadius: 10,
+  paddingHorizontal: 12,
+  paddingVertical: 11,
+  color: "#E6F3F3",
+  fontSize: 14,
+  backgroundColor: "rgba(255,255,255,0.06)",
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.10)",
+}
+const PRIMARY_BTN: ViewStyle = {
+  width: "100%",
+  borderRadius: 10,
+  paddingVertical: 12,
+  alignItems: "center",
+  backgroundColor: "#37D6C0",
+}
+const PRIMARY_TXT: TextStyle = { fontWeight: "700", fontSize: 14, color: "#04211D" }
+const NOTICE_ERROR: ViewStyle = {
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  borderRadius: 10,
+  marginBottom: 14,
+  backgroundColor: "rgba(255,127,114,0.12)",
+  borderWidth: 1,
+  borderColor: "rgba(255,127,114,0.30)",
+}
+const NOTICE_OK: ViewStyle = {
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  borderRadius: 10,
+  marginBottom: 14,
+  backgroundColor: "rgba(55,214,192,0.12)",
+  borderWidth: 1,
+  borderColor: "rgba(55,214,192,0.30)",
+}
+
 export default function ChatScreen() {
   const [activeServer, setActiveServer] = useState("1")
   const [activeChannel, setActiveChannel] = useState("general")
   const [showMembers, setShowMembers] = useState(false)
   const [input, setInput] = useState("")
+
+  // Web-only hover tooltip for the server rail: shows the full server name next
+  // to its icon, so long names stay discoverable even when the icon is just an
+  // abbreviation or a photo.
+  const [tooltip, setTooltip] = useState<{ label: string; y: number } | null>(null)
+  const [hoveredMember, setHoveredMember] = useState<string | null>(null)
+
+  const showTooltip = (label: string) => (e: any) => {
+    if (Platform.OS !== "web") return
+    const rect = e?.currentTarget?.getBoundingClientRect?.()
+    if (rect) setTooltip({ label, y: rect.top + rect.height / 2 })
+  }
+  const hideTooltip = () => setTooltip(null)
 
   const [servers, setServers] = useState<Server[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -85,7 +149,13 @@ export default function ChatScreen() {
   }, [])
 
   useEffect(() => {
-    getCategories(activeServer).then(setCategories)
+    getCategories(activeServer).then((cats) => {
+      setCategories(cats)
+      // Switch focus to the new server's first text channel so we never keep
+      // showing the previous server's channel (and its messages).
+      const firstText = cats.flatMap((c) => c.channels).find((c) => c.type === "text")
+      if (firstText) setActiveChannel(firstText.id)
+    })
     getRoles(activeServer).then(setRoles)
   }, [activeServer])
 
@@ -288,7 +358,12 @@ export default function ChatScreen() {
       >
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ alignItems: "center", gap: 8 }}>
           {servers.map((s) => (
-            <View key={s.id}>
+            <View
+              key={s.id}
+              {...(Platform.OS === "web"
+                ? { onMouseEnter: showTooltip(s.name), onMouseLeave: hideTooltip }
+                : {})}
+            >
               {activeServer === s.id && (
                 <View
                   style={{ position: "absolute", backgroundColor: "#37D6C0", borderTopRightRadius: 2, borderBottomRightRadius: 2, left: -11, top: 6, bottom: 6, width: 3 }}
@@ -296,26 +371,38 @@ export default function ChatScreen() {
               )}
               <TouchableOpacity
                 onPress={() => setActiveServer(s.id)}
+                accessibilityLabel={s.name}
                 style={{
                   alignItems: "center",
                   justifyContent: "center",
                   width: 34,
                   height: 34,
                   borderRadius: 15,
-                  backgroundColor: activeServer === s.id ? "#37D6C0" : "rgba(255,255,255,0.10)",
+                  backgroundColor: s.iconUrl
+                    ? "transparent"
+                    : activeServer === s.id
+                      ? "#37D6C0"
+                      : "rgba(255,255,255,0.10)",
                   borderWidth: 1,
-                  borderColor: "rgba(255,255,255,0.13)",
+                  borderColor: activeServer === s.id ? "#37D6C0" : "rgba(255,255,255,0.13)",
                 }}
               >
-                <Text
-                  style={{
-                    fontWeight: "800",
-                    fontSize: 12,
-                    color: activeServer === s.id ? "#04211D" : "#E6F3F3",
-                  }}
-                >
-                  {s.abbr}
-                </Text>
+                {s.iconUrl ? (
+                  <Image
+                    source={{ uri: s.iconUrl }}
+                    style={{ width: 34, height: 34, borderRadius: 15 }}
+                  />
+                ) : (
+                  <Text
+                    style={{
+                      fontWeight: "800",
+                      fontSize: 12,
+                      color: activeServer === s.id ? "#04211D" : "#E6F3F3",
+                    }}
+                  >
+                    {s.abbr}
+                  </Text>
+                )}
                 {s.mention ? (
                   <View
                     style={{
@@ -341,23 +428,57 @@ export default function ChatScreen() {
               </TouchableOpacity>
             </View>
           ))}
-          <TouchableOpacity
-            onPress={() => openAddModal("create")}
-            style={{
-              alignItems: "center",
-              justifyContent: "center",
-              width: 34,
-              height: 34,
-              borderRadius: 15,
-              backgroundColor: "rgba(255,255,255,0.10)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.13)",
-            }}
+          <View
+            {...(Platform.OS === "web"
+              ? { onMouseEnter: showTooltip("Agregar servidor"), onMouseLeave: hideTooltip }
+              : {})}
           >
-            <Text style={{ color: "#37D6C0", fontSize: 18 }}>+</Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => openAddModal("create")}
+              accessibilityLabel="Agregar servidor"
+              style={{
+                alignItems: "center",
+                justifyContent: "center",
+                width: 34,
+                height: 34,
+                borderRadius: 15,
+                backgroundColor: "rgba(255,255,255,0.10)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.13)",
+              }}
+            >
+              <Text style={{ color: "#37D6C0", fontSize: 18 }}>+</Text>
+            </TouchableOpacity>
+          </View>
         </ScrollView>
       </View>
+
+      {/* Server rail hover tooltip (web only) */}
+      {Platform.OS === "web" && tooltip ? (
+        <View
+          pointerEvents="none"
+          style={
+            {
+              position: "fixed",
+              left: 58,
+              top: tooltip.y,
+              marginTop: -14,
+              paddingHorizontal: 10,
+              paddingVertical: 6,
+              borderRadius: 8,
+              backgroundColor: "#04211D",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.13)",
+              zIndex: 50,
+              maxWidth: 240,
+            } as any
+          }
+        >
+          <Text style={{ color: "#E6F3F3", fontSize: 12, fontWeight: "700" }} numberOfLines={1}>
+            {tooltip.label}
+          </Text>
+        </View>
+      ) : null}
 
       {/* Channel sidebar */}
       <View
@@ -368,40 +489,45 @@ export default function ChatScreen() {
           borderRightColor: "rgba(255,255,255,0.13)",
         }}
       >
-        {/* Server name header */}
+        {/* Server name header: name on its own row so long names stay readable,
+            actions on a compact row underneath. */}
         <View
-          style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.13)" }}
+          style={{ paddingHorizontal: 12, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.13)" }}
         >
-          <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14, flex: 1 }} numberOfLines={1}>
+          <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }} numberOfLines={2}>
             {servers.find((s) => s.id === activeServer)?.name ?? ""}
           </Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <TouchableOpacity
               onPress={handleGenerateInvite}
               style={{
-                paddingHorizontal: 8,
-                paddingVertical: 4,
-                borderRadius: 9999,
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.13)",
-                backgroundColor: "rgba(55,214,192,0.15)",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 5,
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+                borderRadius: 8,
+                backgroundColor: "rgba(55,214,192,0.12)",
               }}
             >
-              <Text style={{ color: "#37D6C0", fontSize: 10.5, fontWeight: "700" }}>Invitar</Text>
+              <Ionicons name="person-add-outline" size={13} color="#37D6C0" />
+              <Text style={{ color: "#37D6C0", fontSize: 11.5, fontWeight: "700" }}>Invitar</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={openLeaveModal}
               accessibilityLabel="Salir del servidor"
               style={{
-                paddingHorizontal: 8,
-                paddingVertical: 4,
-                borderRadius: 9999,
-                borderWidth: 1,
-                borderColor: "rgba(255,127,114,0.45)",
-                backgroundColor: "rgba(255,127,114,0.15)",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 5,
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+                borderRadius: 8,
+                backgroundColor: "rgba(255,255,255,0.05)",
               }}
             >
-              <Text style={{ color: "#FF7F72", fontSize: 10.5, fontWeight: "700" }}>Salir</Text>
+              <Ionicons name="exit-outline" size={13} color="#8DA8AC" />
+              <Text style={{ color: "#8DA8AC", fontSize: 11.5, fontWeight: "600" }}>Salir</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -409,11 +535,10 @@ export default function ChatScreen() {
         <ScrollView style={{ flex: 1 }}>
           {categories.map((cat) => (
             <View key={cat.id}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 12, paddingTop: 12, paddingBottom: 4 }}>
+              <View style={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 4 }}>
                 <Text style={{ color: "#8DA8AC", fontWeight: "700", textTransform: "uppercase", fontSize: 9.5, letterSpacing: 1.3 }}>
                   {cat.name}
                 </Text>
-                <Text style={{ color: "#8DA8AC", fontSize: 9.5 }}>+</Text>
               </View>
               {cat.channels.map((ch) => {
                 const active = activeChannel === ch.id
@@ -497,16 +622,25 @@ export default function ChatScreen() {
           </Text>
           <TouchableOpacity
             onPress={() => setShowMembers((o) => !o)}
+            accessibilityLabel="Mostrar u ocultar miembros"
             style={{
-              paddingHorizontal: 8,
-              paddingVertical: 4,
-              borderRadius: 9999,
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.13)",
-              backgroundColor: "rgba(255,255,255,0.10)",
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 5,
+              paddingHorizontal: 10,
+              paddingVertical: 5,
+              borderRadius: 8,
+              backgroundColor: showMembers ? "rgba(55,214,192,0.14)" : "rgba(255,255,255,0.05)",
             }}
           >
-            <Text style={{ color: "#8DA8AC", fontSize: 10.5 }}>Miembros</Text>
+            <Ionicons
+              name={showMembers ? "people" : "people-outline"}
+              size={14}
+              color={showMembers ? "#37D6C0" : "#8DA8AC"}
+            />
+            <Text style={{ color: showMembers ? "#37D6C0" : "#8DA8AC", fontSize: 11.5, fontWeight: "600" }}>
+              Miembros
+            </Text>
           </TouchableOpacity>
         </View>
 
@@ -570,9 +704,11 @@ export default function ChatScreen() {
           )}
         />
 
-        {/* Typing indicator */}
-        <View style={{ paddingHorizontal: 16, paddingBottom: 4 }}>
-          <Text style={{ color: "#8DA8AC", fontSize: 10.5 }}>Mora está escribiendo…</Text>
+        {/* Typing indicator: demo, shown only in the example server's #anuncios */}
+        <View style={{ paddingHorizontal: 16, paddingBottom: 4, minHeight: 18 }}>
+          {activeChannel === "anuncios" ? (
+            <Text style={{ color: "#8DA8AC", fontSize: 10.5 }}>Mora está escribiendo…</Text>
+          ) : null}
         </View>
 
         {/* Input */}
@@ -609,458 +745,340 @@ export default function ChatScreen() {
 
       {/* Members panel */}
       {showMembers && (
-        <ScrollView
+        <View
           style={{
-            width: 170,
-            backgroundColor: "rgba(255,255,255,0.055)",
+            width: 216,
+            backgroundColor: "rgba(255,255,255,0.03)",
             borderLeftWidth: 1,
-            borderLeftColor: "rgba(255,255,255,0.13)",
+            borderLeftColor: "rgba(255,255,255,0.10)",
           }}
-          contentContainerStyle={{ padding: 12 }}
         >
-          {roles.map((role) => (
-            <View key={role.name}>
-              <Text style={{ color: "#8DA8AC", fontWeight: "700", textTransform: "uppercase", marginTop: 12, marginBottom: 6, fontSize: 9.5, letterSpacing: 1.2 }}>
-                {role.name} — {role.members.length}
+          {/* Panel header */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              paddingHorizontal: 14,
+              paddingVertical: 13,
+              borderBottomWidth: 1,
+              borderBottomColor: "rgba(255,255,255,0.08)",
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 13 }}>Miembros</Text>
+              <View style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 9999, backgroundColor: "rgba(255,255,255,0.06)" }}>
+                <Text style={{ color: "#8DA8AC", fontSize: 11, fontWeight: "700" }}>
+                  {roles.reduce((n, r) => n + r.members.length, 0)}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              onPress={() => setShowMembers(false)}
+              accessibilityLabel="Cerrar miembros"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{ width: 26, height: 26, borderRadius: 8, alignItems: "center", justifyContent: "center" }}
+            >
+              <Ionicons name="close" size={17} color="#8DA8AC" />
+            </TouchableOpacity>
+          </View>
+
+          {roles.length === 0 ? (
+            <View style={{ alignItems: "center", paddingHorizontal: 20, paddingTop: 44, gap: 8 }}>
+              <Ionicons name="people-outline" size={30} color="#5E7E82" />
+              <Text style={{ color: "#E6F3F3", fontSize: 13, fontWeight: "600", textAlign: "center" }}>
+                Todavía no hay miembros
               </Text>
-              {role.members.map((m) => (
-                <View
-                  key={m.id}
-                  style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4, opacity: m.status === "offline" ? 0.55 : 1 }}
-                >
-                  <View style={{ position: "relative" }}>
-                    <Avatar initials={m.avatar} size={20} />
-                    <StatusDot status={m.status} />
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={{ color: "#E6F3F3", fontWeight: "600", fontSize: 11.5 }} numberOfLines={1}>
-                      {m.name}
+              <Text style={{ color: "#8DA8AC", fontSize: 11.5, textAlign: "center", lineHeight: 16 }}>
+                Invitá a alguien para empezar a chatear.
+              </Text>
+            </View>
+          ) : (
+            <ScrollView contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: 12 }}>
+              {roles.map((role) => (
+                <View key={role.name} style={{ marginTop: 14 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 6, marginBottom: 4 }}>
+                    <View style={{ width: 7, height: 7, borderRadius: 9999, backgroundColor: role.color }} />
+                    <Text style={{ color: "#8DA8AC", fontWeight: "700", textTransform: "uppercase", fontSize: 9.5, letterSpacing: 1.1 }}>
+                      {role.name}
                     </Text>
-                    <Text style={{ color: "#8DA8AC", fontSize: 9.5 }} numberOfLines={1}>
-                      {m.status === "online" ? "En línea" : m.status === "away" ? "Ausente" : "Desconectado/a"}
+                    <Text style={{ color: "#5E7E82", fontSize: 9.5, fontWeight: "700", marginLeft: "auto" }}>
+                      {role.members.length}
                     </Text>
                   </View>
+                  {role.members.map((m) => {
+                    const nameColor = role.color === "#8DA8AC" ? "#E6F3F3" : role.color
+                    const hovered = hoveredMember === m.id
+                    return (
+                      <View
+                        key={m.id}
+                        {...(Platform.OS === "web"
+                          ? {
+                              onMouseEnter: () => setHoveredMember(m.id),
+                              onMouseLeave: () => setHoveredMember(null),
+                            }
+                          : {})}
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 9,
+                          paddingHorizontal: 6,
+                          paddingVertical: 5,
+                          borderRadius: 8,
+                          backgroundColor: hovered ? "rgba(255,255,255,0.05)" : "transparent",
+                          opacity: m.status === "offline" ? 0.55 : 1,
+                        }}
+                      >
+                        <View style={{ position: "relative" }}>
+                          <Avatar initials={m.avatar} size={26} />
+                          <StatusDot status={m.status} />
+                        </View>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={{ color: nameColor, fontWeight: "600", fontSize: 12.5 }} numberOfLines={1}>
+                            {m.name}
+                          </Text>
+                          <Text style={{ color: "#8DA8AC", fontSize: 10 }} numberOfLines={1}>
+                            {m.status === "online" ? "En línea" : m.status === "away" ? "Ausente" : "Desconectado/a"}
+                          </Text>
+                        </View>
+                      </View>
+                    )
+                  })}
                 </View>
               ))}
-            </View>
-          ))}
-        </ScrollView>
+            </ScrollView>
+          )}
+        </View>
       )}
 
       {/* Add server modal: create (HU-1) / join (HU-3) */}
-      <Modal
+      <ModalShell
         visible={addModalOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setAddModalOpen(false)}
+        onClose={() => setAddModalOpen(false)}
+        title="Agregar servidor"
+        subtitle="Creá tu propio espacio o unite a uno con un link de invitación."
       >
+        {/* Segmented control */}
         <View
           style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.6)",
-            justifyContent: "center",
-            alignItems: "center",
-            padding: 24,
+            flexDirection: "row",
+            padding: 3,
+            borderRadius: 10,
+            backgroundColor: "rgba(255,255,255,0.05)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.08)",
+            marginBottom: 18,
           }}
         >
-          <View
-            style={{
-              width: "100%",
-              maxWidth: 360,
-              borderRadius: 16,
-              padding: 20,
-              backgroundColor: "#0A1620",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.13)",
-            }}
-          >
-            {/* Tabs */}
-            <View style={{ flexDirection: "row", gap: 8, marginBottom: 16 }}>
-              {(["create", "join"] as const).map((mode) => {
-                const active = addMode === mode
-                return (
-                  <TouchableOpacity
-                    key={mode}
-                    onPress={() => setAddMode(mode)}
-                    style={{
-                      flex: 1,
-                      paddingVertical: 8,
-                      borderRadius: 10,
-                      alignItems: "center",
-                      backgroundColor: active ? "rgba(55,214,192,0.15)" : "rgba(255,255,255,0.055)",
-                      borderWidth: 1,
-                      borderColor: active ? "#37D6C0" : "rgba(255,255,255,0.13)",
-                    }}
-                  >
-                    <Text style={{ color: active ? "#37D6C0" : "#8DA8AC", fontWeight: "700", fontSize: 12.5 }}>
-                      {mode === "create" ? "Crear" : "Unirse"}
-                    </Text>
-                  </TouchableOpacity>
-                )
-              })}
-            </View>
-
-            {addMode === "create" ? (
-              <>
-                <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 16, marginBottom: 14 }}>
-                  Crear servidor
+          {(["create", "join"] as const).map((mode) => {
+            const active = addMode === mode
+            return (
+              <TouchableOpacity
+                key={mode}
+                onPress={() => setAddMode(mode)}
+                style={{
+                  flex: 1,
+                  paddingVertical: 7,
+                  borderRadius: 8,
+                  alignItems: "center",
+                  backgroundColor: active ? "rgba(55,214,192,0.16)" : "transparent",
+                }}
+              >
+                <Text style={{ color: active ? "#37D6C0" : "#8DA8AC", fontWeight: "700", fontSize: 12.5 }}>
+                  {mode === "create" ? "Crear" : "Unirse"}
                 </Text>
-                {createError ? (
-                  <View
-                    style={{
-                      padding: 10,
-                      borderRadius: 12,
-                      marginBottom: 12,
-                      backgroundColor: "rgba(255,127,114,0.15)",
-                      borderWidth: 1,
-                      borderColor: "#FF7F72",
-                    }}
-                  >
-                    <Text style={{ color: "#FF7F72", fontSize: 12 }}>{createError}</Text>
-                  </View>
-                ) : null}
-                <Text style={{ color: "#8DA8AC", fontSize: 10, fontWeight: "600", textTransform: "uppercase", letterSpacing: 1.1, marginBottom: 4 }}>
-                  Nombre del servidor
-                </Text>
-                <TextInput
-                  value={serverName}
-                  onChangeText={setServerName}
-                  placeholder="Ej: FIUBA · IS2"
-                  placeholderTextColor="#5E7E82"
-                  maxLength={SERVER_NAME_MAX}
-                  style={{
-                    width: "100%",
-                    borderRadius: 12,
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
-                    color: "#E6F3F3",
-                    fontSize: 14,
-                    backgroundColor: "rgba(255,255,255,0.10)",
-                    borderWidth: 1,
-                    borderColor: "rgba(255,255,255,0.13)",
-                    marginBottom: 12,
-                  }}
-                />
-                <TouchableOpacity
-                  onPress={handlePickIcon}
-                  style={{
-                    borderRadius: 12,
-                    paddingVertical: 10,
-                    alignItems: "center",
-                    marginBottom: 6,
-                    borderWidth: 1,
-                    borderColor: "rgba(255,255,255,0.13)",
-                    backgroundColor: "rgba(255,255,255,0.10)",
-                  }}
-                >
-                  <Text style={{ color: "#E6F3F3", fontSize: 12, fontWeight: "600" }}>
-                    {iconLabel || "Elegir ícono (opcional)"}
-                  </Text>
-                </TouchableOpacity>
-                {iconLabel ? (
-                  <TouchableOpacity onPress={() => { setServerIcon(null); setIconLabel("") }} style={{ marginBottom: 8 }}>
-                    <Text style={{ color: "#8DA8AC", fontSize: 11 }}>Quitar ícono</Text>
-                  </TouchableOpacity>
-                ) : null}
-                <TouchableOpacity
-                  onPress={handleCreateServer}
-                  disabled={createBusy}
-                  style={{
-                    width: "100%",
-                    borderRadius: 12,
-                    paddingVertical: 12,
-                    alignItems: "center",
-                    marginTop: 6,
-                    backgroundColor: "#37D6C0",
-                    opacity: createBusy ? 0.7 : 1,
-                  }}
-                >
-                  {createBusy ? (
-                    <ActivityIndicator color="#04211D" />
-                  ) : (
-                    <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>
-                      Crear servidor
-                    </Text>
-                  )}
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 16, marginBottom: 14 }}>
-                  Unirse a un servidor
-                </Text>
-                {joinError ? (
-                  <View
-                    style={{
-                      padding: 10,
-                      borderRadius: 12,
-                      marginBottom: 12,
-                      backgroundColor: "rgba(255,127,114,0.15)",
-                      borderWidth: 1,
-                      borderColor: "#FF7F72",
-                    }}
-                  >
-                    <Text style={{ color: "#FF7F72", fontSize: 12 }}>{joinError}</Text>
-                  </View>
-                ) : null}
-                {joinNotice ? (
-                  <View
-                    style={{
-                      padding: 10,
-                      borderRadius: 12,
-                      marginBottom: 12,
-                      backgroundColor: "rgba(55,214,192,0.15)",
-                      borderWidth: 1,
-                      borderColor: "#37D6C0",
-                    }}
-                  >
-                    <Text style={{ color: "#37D6C0", fontSize: 12 }}>{joinNotice}</Text>
-                  </View>
-                ) : null}
-                <Text style={{ color: "#8DA8AC", fontSize: 10, fontWeight: "600", textTransform: "uppercase", letterSpacing: 1.1, marginBottom: 4 }}>
-                  Código o link de invitación
-                </Text>
-                <TextInput
-                  value={joinInput}
-                  onChangeText={setJoinInput}
-                  placeholder="Ej: https://discordia.app/invite/abc123"
-                  placeholderTextColor="#5E7E82"
-                  autoCapitalize="none"
-                  style={{
-                    width: "100%",
-                    borderRadius: 12,
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
-                    color: "#E6F3F3",
-                    fontSize: 14,
-                    backgroundColor: "rgba(255,255,255,0.10)",
-                    borderWidth: 1,
-                    borderColor: "rgba(255,255,255,0.13)",
-                    marginBottom: 12,
-                  }}
-                />
-                <TouchableOpacity
-                  onPress={handleJoin}
-                  disabled={joinBusy}
-                  style={{
-                    width: "100%",
-                    borderRadius: 12,
-                    paddingVertical: 12,
-                    alignItems: "center",
-                    backgroundColor: "#37D6C0",
-                    opacity: joinBusy ? 0.7 : 1,
-                  }}
-                >
-                  {joinBusy ? (
-                    <ActivityIndicator color="#04211D" />
-                  ) : (
-                    <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>
-                      Unirse
-                    </Text>
-                  )}
-                </TouchableOpacity>
-              </>
-            )}
-
-            <TouchableOpacity
-              onPress={() => setAddModalOpen(false)}
-              style={{ width: "100%", paddingVertical: 12, alignItems: "center", marginTop: 8 }}
-            >
-              <Text style={{ color: "#8DA8AC", fontWeight: "600", fontSize: 13 }}>Cerrar</Text>
-            </TouchableOpacity>
-          </View>
+              </TouchableOpacity>
+            )
+          })}
         </View>
-      </Modal>
+
+        {addMode === "create" ? (
+          <>
+            {createError ? (
+              <View style={NOTICE_ERROR}>
+                <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{createError}</Text>
+              </View>
+            ) : null}
+            <Text style={LABEL}>Nombre del servidor</Text>
+            <TextInput
+              value={serverName}
+              onChangeText={setServerName}
+              placeholder="Ej: FIUBA · IS2"
+              placeholderTextColor="#5E7E82"
+              maxLength={SERVER_NAME_MAX}
+              style={[FIELD, { marginBottom: 16 }]}
+            />
+            <Text style={LABEL}>Ícono</Text>
+            <TouchableOpacity
+              onPress={handlePickIcon}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 10,
+                borderRadius: 10,
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+                borderWidth: 1,
+                borderStyle: "dashed",
+                borderColor: "rgba(255,255,255,0.16)",
+                backgroundColor: "rgba(255,255,255,0.04)",
+              }}
+            >
+              <View style={{ width: 30, height: 30, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(55,214,192,0.14)" }}>
+                <Text style={{ color: "#37D6C0", fontSize: 16 }}>＋</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: "#E6F3F3", fontSize: 12.5, fontWeight: "600" }} numberOfLines={1}>
+                  {iconLabel || "Subir una imagen"}
+                </Text>
+                <Text style={{ color: "#5E7E82", fontSize: 10.5 }}>Opcional · PNG o JPG</Text>
+              </View>
+              {iconLabel ? (
+                <TouchableOpacity
+                  onPress={() => { setServerIcon(null); setIconLabel("") }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={{ color: "#8DA8AC", fontSize: 11, fontWeight: "600" }}>Quitar</Text>
+                </TouchableOpacity>
+              ) : null}
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleCreateServer}
+              disabled={createBusy}
+              style={[PRIMARY_BTN, { marginTop: 18, opacity: createBusy ? 0.7 : 1 }]}
+            >
+              {createBusy ? <ActivityIndicator color="#04211D" /> : <Text style={PRIMARY_TXT}>Crear servidor</Text>}
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            {joinError ? (
+              <View style={NOTICE_ERROR}>
+                <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{joinError}</Text>
+              </View>
+            ) : null}
+            {joinNotice ? (
+              <View style={NOTICE_OK}>
+                <Text style={{ color: "#37D6C0", fontSize: 12.5 }}>{joinNotice}</Text>
+              </View>
+            ) : null}
+            <Text style={LABEL}>Código o link de invitación</Text>
+            <TextInput
+              value={joinInput}
+              onChangeText={setJoinInput}
+              placeholder="Ej: discordia.app/invite/abc123"
+              placeholderTextColor="#5E7E82"
+              autoCapitalize="none"
+              style={[FIELD, { marginBottom: 18 }]}
+            />
+            <TouchableOpacity
+              onPress={handleJoin}
+              disabled={joinBusy}
+              style={[PRIMARY_BTN, { opacity: joinBusy ? 0.7 : 1 }]}
+            >
+              {joinBusy ? <ActivityIndicator color="#04211D" /> : <Text style={PRIMARY_TXT}>Unirse</Text>}
+            </TouchableOpacity>
+          </>
+        )}
+      </ModalShell>
 
       {/* Invite panel (HU-2) */}
-      <Modal
+      <ModalShell
         visible={inviteOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setInviteOpen(false)}
+        onClose={() => setInviteOpen(false)}
+        title="Invitar al servidor"
+        subtitle={`Compartí este link para sumar gente a ${servers.find((s) => s.id === activeServer)?.name ?? "este servidor"}.`}
       >
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.6)",
-            justifyContent: "center",
-            alignItems: "center",
-            padding: 24,
-          }}
-        >
-          <View
-            style={{
-              width: "100%",
-              maxWidth: 360,
-              borderRadius: 16,
-              padding: 20,
-              backgroundColor: "#0A1620",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.13)",
-            }}
-          >
-            <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 16, marginBottom: 14 }}>
-              Invitar a {servers.find((s) => s.id === activeServer)?.name ?? "este servidor"}
-            </Text>
-
-            {inviteBusy ? (
-              <View style={{ paddingVertical: 20, alignItems: "center" }}>
-                <ActivityIndicator color="#37D6C0" />
-                <Text style={{ color: "#8DA8AC", fontSize: 12, marginTop: 10 }}>Generando invitación…</Text>
-              </View>
-            ) : inviteError ? (
-              <View
-                style={{
-                  padding: 10,
-                  borderRadius: 12,
-                  marginBottom: 12,
-                  backgroundColor: "rgba(255,127,114,0.15)",
-                  borderWidth: 1,
-                  borderColor: "#FF7F72",
-                }}
-              >
-                <Text style={{ color: "#FF7F72", fontSize: 12 }}>{inviteError}</Text>
-              </View>
-            ) : invite ? (
-              <>
-                <Text style={{ color: "#8DA8AC", fontSize: 10, fontWeight: "600", textTransform: "uppercase", letterSpacing: 1.1, marginBottom: 4 }}>
-                  Link de invitación
-                </Text>
-                <View
-                  style={{
-                    borderRadius: 12,
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
-                    backgroundColor: "rgba(255,255,255,0.10)",
-                    borderWidth: 1,
-                    borderColor: "rgba(255,255,255,0.13)",
-                    marginBottom: 12,
-                  }}
-                >
-                  <Text selectable style={{ color: "#E6F3F3", fontSize: 13 }}>
-                    {invite.url}
-                  </Text>
-                </View>
-                <TouchableOpacity
-                  onPress={handleCopyInvite}
-                  style={{
-                    width: "100%",
-                    borderRadius: 12,
-                    paddingVertical: 12,
-                    alignItems: "center",
-                    backgroundColor: "#37D6C0",
-                  }}
-                >
-                  <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>
-                    {copied ? "¡Copiado!" : "Copiar"}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            ) : null}
-
-            <TouchableOpacity
-              onPress={() => setInviteOpen(false)}
-              style={{ width: "100%", paddingVertical: 12, alignItems: "center", marginTop: 8 }}
-            >
-              <Text style={{ color: "#8DA8AC", fontWeight: "600", fontSize: 13 }}>Cerrar</Text>
-            </TouchableOpacity>
+        {inviteBusy ? (
+          <View style={{ paddingVertical: 24, alignItems: "center" }}>
+            <ActivityIndicator color="#37D6C0" />
+            <Text style={{ color: "#8DA8AC", fontSize: 12.5, marginTop: 10 }}>Generando invitación…</Text>
           </View>
-        </View>
-      </Modal>
+        ) : inviteError ? (
+          <View style={NOTICE_ERROR}>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{inviteError}</Text>
+          </View>
+        ) : invite ? (
+          <>
+            <Text style={LABEL}>Link de invitación</Text>
+            <View
+              style={{
+                borderRadius: 10,
+                paddingHorizontal: 12,
+                paddingVertical: 11,
+                backgroundColor: "rgba(255,255,255,0.06)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.10)",
+                marginBottom: 14,
+              }}
+            >
+              <Text selectable numberOfLines={1} style={{ color: "#E6F3F3", fontSize: 13 }}>
+                {invite.url}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={handleCopyInvite} style={PRIMARY_BTN}>
+              <Text style={PRIMARY_TXT}>{copied ? "¡Copiado!" : "Copiar link"}</Text>
+            </TouchableOpacity>
+          </>
+        ) : null}
+      </ModalShell>
 
       {/* Leave-server confirmation (HU-5) */}
-      <Modal
+      <ModalShell
         visible={leaveOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setLeaveOpen(false)}
+        onClose={() => setLeaveOpen(false)}
+        title="Abandonar servidor"
       >
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.6)",
-            justifyContent: "center",
-            alignItems: "center",
-            padding: 24,
-          }}
-        >
-          <View
+        <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 18 }}>
+          ¿Seguro que querés abandonar{" "}
+          <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>
+            {servers.find((s) => s.id === activeServer)?.name ?? "este servidor"}
+          </Text>
+          ? Vas a perder el acceso a sus canales.
+        </Text>
+
+        {leaveError ? (
+          <View style={NOTICE_ERROR}>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{leaveError}</Text>
+          </View>
+        ) : null}
+
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <TouchableOpacity
+            onPress={() => setLeaveOpen(false)}
+            disabled={leaveBusy}
             style={{
-              width: "100%",
-              maxWidth: 360,
-              borderRadius: 16,
-              padding: 20,
-              backgroundColor: "#0A1620",
+              flex: 1,
+              borderRadius: 10,
+              paddingVertical: 12,
+              alignItems: "center",
               borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.13)",
+              borderColor: "rgba(255,255,255,0.10)",
+              backgroundColor: "rgba(255,255,255,0.06)",
             }}
           >
-            <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 16, marginBottom: 10 }}>
-              Abandonar servidor
-            </Text>
-            <Text style={{ color: "#8DA8AC", fontSize: 13, marginBottom: 16 }}>
-              ¿Seguro que querés abandonar{" "}
-              <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>
-                {servers.find((s) => s.id === activeServer)?.name ?? "este servidor"}
-              </Text>
-              ? Vas a perder el acceso a sus canales.
-            </Text>
-
-            {leaveError ? (
-              <View
-                style={{
-                  padding: 10,
-                  borderRadius: 12,
-                  marginBottom: 12,
-                  backgroundColor: "rgba(255,127,114,0.15)",
-                  borderWidth: 1,
-                  borderColor: "#FF7F72",
-                }}
-              >
-                <Text style={{ color: "#FF7F72", fontSize: 12 }}>{leaveError}</Text>
-              </View>
-            ) : null}
-
-            <View style={{ flexDirection: "row", gap: 8 }}>
-              <TouchableOpacity
-                onPress={() => setLeaveOpen(false)}
-                disabled={leaveBusy}
-                style={{
-                  flex: 1,
-                  borderRadius: 12,
-                  paddingVertical: 12,
-                  alignItems: "center",
-                  borderWidth: 1,
-                  borderColor: "rgba(255,255,255,0.13)",
-                  backgroundColor: "rgba(255,255,255,0.10)",
-                }}
-              >
-                <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleLeaveServer}
-                disabled={leaveBusy}
-                style={{
-                  flex: 1,
-                  borderRadius: 12,
-                  paddingVertical: 12,
-                  alignItems: "center",
-                  backgroundColor: "#FF7F72",
-                  opacity: leaveBusy ? 0.7 : 1,
-                }}
-              >
-                {leaveBusy ? (
-                  <ActivityIndicator color="#04211D" />
-                ) : (
-                  <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>
-                    Abandonar
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
+            <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={handleLeaveServer}
+            disabled={leaveBusy}
+            style={{
+              flex: 1,
+              borderRadius: 10,
+              paddingVertical: 12,
+              alignItems: "center",
+              backgroundColor: "#FF7F72",
+              opacity: leaveBusy ? 0.7 : 1,
+            }}
+          >
+            {leaveBusy ? (
+              <ActivityIndicator color="#04211D" />
+            ) : (
+              <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>Abandonar</Text>
+            )}
+          </TouchableOpacity>
         </View>
-      </Modal>
+      </ModalShell>
     </View>
   )
 }

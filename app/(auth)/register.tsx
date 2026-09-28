@@ -2,7 +2,6 @@ import { useState } from "react"
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   ScrollView,
   KeyboardAvoidingView,
@@ -12,6 +11,21 @@ import { useRouter } from "expo-router"
 import { useAuth } from "@/context/AuthContext"
 import { register } from "@/api/auth"
 import { friendlyError } from "@/api/client"
+import AuthBrand from "@/components/AuthBrand"
+import AuthField from "@/components/AuthField"
+
+const NOTICE_ERROR = {
+  flexDirection: "row" as const,
+  alignItems: "flex-start" as const,
+  gap: 8,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  borderRadius: 10,
+  marginBottom: 14,
+  backgroundColor: "rgba(255,127,114,0.12)",
+  borderWidth: 1,
+  borderColor: "rgba(255,127,114,0.30)",
+}
 
 function Req({ met, text }: { met: boolean; text: string }) {
   return (
@@ -96,124 +110,50 @@ export default function RegisterScreen() {
             borderColor: "rgba(255,255,255,0.13)",
           }}
         >
-          {/* Brand */}
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 20 }}>
-            <View style={{ width: 28, height: 28, borderRadius: 9999, backgroundColor: "#37D6C0", alignItems: "center", justifyContent: "center" }}>
-              <Text style={{ color: "#04211D", fontWeight: "900", fontSize: 14 }}>D</Text>
-            </View>
-            <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 16 }}>Discordia</Text>
-          </View>
-
-          <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 20, marginBottom: 4 }}>Creá tu cuenta</Text>
-          <Text style={{ color: "#8DA8AC", fontSize: 12, marginBottom: 16 }}>
-            Un minuto y ya podés abrir tu primer servidor.
-          </Text>
+          <AuthBrand title="Creá tu cuenta" subtitle="Un minuto y ya podés abrir tu primer servidor." />
 
           {/* Email dupe error */}
           {emailDupe ? (
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "flex-start",
-                gap: 8,
-                padding: 10,
-                borderRadius: 12,
-                marginBottom: 12,
-                backgroundColor: "rgba(255,127,114,0.15)",
-                borderWidth: 1,
-                borderColor: "#FF7F72",
-              }}
-            >
-              <Text style={{ color: "#FF7F72", fontWeight: "700" }}>!</Text>
-              <Text style={{ color: "#FF7F72", fontSize: 12, flex: 1 }}>
+            <View style={NOTICE_ERROR}>
+              <Text style={{ color: "#FF9E94", fontWeight: "700" }}>!</Text>
+              <Text style={{ color: "#FF9E94", fontSize: 12.5, flex: 1 }}>
                 Ese correo ya está en uso. ¿Querés iniciar sesión?
               </Text>
             </View>
           ) : null}
 
           {error ? (
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "flex-start",
-                gap: 8,
-                padding: 10,
-                borderRadius: 12,
-                marginBottom: 12,
-                backgroundColor: "rgba(255,127,114,0.15)",
-                borderWidth: 1,
-                borderColor: "#FF7F72",
-              }}
-            >
-              <Text style={{ color: "#FF7F72", fontWeight: "700" }}>!</Text>
-              <Text style={{ color: "#FF7F72", fontSize: 12, flex: 1 }}>{error}</Text>
+            <View style={NOTICE_ERROR}>
+              <Text style={{ color: "#FF9E94", fontWeight: "700" }}>!</Text>
+              <Text style={{ color: "#FF9E94", fontSize: 12.5, flex: 1 }}>{error}</Text>
             </View>
           ) : null}
 
-          {/* Name */}
-          <Text style={{ color: "#8DA8AC", fontSize: 10, fontWeight: "600", textTransform: "uppercase", letterSpacing: 1.1, marginBottom: 4 }}>Nombre</Text>
-          <TextInput
+          <AuthField
+            label="Nombre"
             value={name}
             onChangeText={setName}
             placeholder="Facundo Arroquy"
-            placeholderTextColor="#5E7E82"
-            style={{
-              width: "100%",
-              borderRadius: 12,
-              paddingHorizontal: 12,
-              paddingVertical: 10,
-              color: "#E6F3F3",
-              fontSize: 14,
-              marginBottom: 12,
-              backgroundColor: "rgba(255,255,255,0.10)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.13)",
-            }}
+            containerStyle={{ marginBottom: 14 }}
           />
 
-          {/* Email */}
-          <Text style={{ color: "#8DA8AC", fontSize: 10, fontWeight: "600", textTransform: "uppercase", letterSpacing: 1.1, marginBottom: 4 }}>Correo electrónico</Text>
-          <TextInput
+          <AuthField
+            label="Correo electrónico"
             value={email}
             onChangeText={setEmail}
             placeholder="vos@ejemplo.com"
-            placeholderTextColor="#5E7E82"
             keyboardType="email-address"
             autoCapitalize="none"
-            style={{
-              width: "100%",
-              borderRadius: 12,
-              paddingHorizontal: 12,
-              paddingVertical: 10,
-              color: "#E6F3F3",
-              fontSize: 14,
-              marginBottom: 12,
-              backgroundColor: "rgba(255,255,255,0.10)",
-              borderWidth: 1,
-              borderColor: emailDupe ? "#FF7F72" : "rgba(255,255,255,0.13)",
-            }}
+            error={emailDupe}
+            containerStyle={{ marginBottom: 14 }}
           />
 
-          {/* Password */}
-          <Text style={{ color: "#8DA8AC", fontSize: 10, fontWeight: "600", textTransform: "uppercase", letterSpacing: 1.1, marginBottom: 4 }}>Contraseña</Text>
-          <TextInput
+          <AuthField
+            label="Contraseña"
             value={pw}
             onChangeText={setPw}
             placeholder="Mínimo 8 caracteres"
-            placeholderTextColor="#5E7E82"
             secureTextEntry
-            style={{
-              width: "100%",
-              borderRadius: 12,
-              paddingHorizontal: 12,
-              paddingVertical: 10,
-              color: "#E6F3F3",
-              fontSize: 14,
-              marginBottom: 8,
-              backgroundColor: "rgba(255,255,255,0.10)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.13)",
-            }}
           />
 
           {/* Password strength */}
@@ -252,10 +192,10 @@ export default function RegisterScreen() {
             disabled={loading || !allMet}
             style={{
               width: "100%",
-              borderRadius: 12,
-              paddingVertical: 12,
+              borderRadius: 10,
+              paddingVertical: 13,
               alignItems: "center",
-              marginTop: 4,
+              marginTop: 6,
               backgroundColor: allMet ? "#37D6C0" : "rgba(255,255,255,0.15)",
             }}
           >

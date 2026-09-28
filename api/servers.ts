@@ -166,6 +166,17 @@ interface BackendInviteOut {
   created_at: string
 }
 
+// Builds the shareable invite URL from the CURRENT origin, so the link matches
+// where the app is actually running: localhost in dev, the real domain in prod.
+// The backend's own `url` is ignored because it hardcodes its deploy host.
+function inviteUrl(code: string): string {
+  const origin =
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "https://discordia.app"
+  return `${origin}/invite/${code}`
+}
+
 // Maps a backend ServerOut/JoinedServerOut into the rail-friendly Server shape.
 function toServer(backend: BackendServerOut): Server {
   return {
@@ -182,7 +193,7 @@ function toInvite(backend: BackendInviteOut): Invite {
   return {
     id: backend.id,
     code: backend.code,
-    url: backend.url,
+    url: inviteUrl(backend.code),
     serverId: backend.server_id,
     expiresAt: backend.expires_at,
     maxUses: backend.max_uses,
@@ -232,7 +243,7 @@ export async function createInvite(
     return {
       id: "inv-" + Math.random().toString(36).slice(2, 10),
       code,
-      url: `https://discordia.app/invite/${code}`,
+      url: inviteUrl(code),
       serverId,
       expiresAt: null,
       maxUses: opts?.maxUses ?? null,
@@ -295,7 +306,7 @@ export async function resolveInvite(code: string): Promise<Invite> {
     return {
       id: "inv-preview",
       code,
-      url: `https://discordia.app/invite/${code}`,
+      url: inviteUrl(code),
       serverId: "srv-preview",
       expiresAt: null,
       maxUses: null,

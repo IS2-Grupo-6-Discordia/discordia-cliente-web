@@ -14,6 +14,7 @@ import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
 import { login } from "@/api/auth"
 import { friendlyError } from "@/api/client"
+import PressableScale from "@/components/PressableScale"
 
 export default function LoginScreen() {
   const { setUser } = useAuth()
@@ -184,7 +185,7 @@ export default function LoginScreen() {
           </View>
 
           {/* Login button */}
-          <TouchableOpacity
+          <PressableScale
             onPress={handleLogin}
             disabled={loading}
             style={{
@@ -206,7 +207,7 @@ export default function LoginScreen() {
             ) : (
               <Text style={{ color: "#04211D", fontWeight: "700", fontSize: 14 }}>Iniciar sesión</Text>
             )}
-          </TouchableOpacity>
+          </PressableScale>
 
           {/* Divider */}
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginVertical: 12 }}>
@@ -216,7 +217,8 @@ export default function LoginScreen() {
           </View>
 
           {/* Google button */}
-          <TouchableOpacity
+          <PressableScale
+            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.08)" }}
             style={{
               width: "100%",
               borderRadius: 10,
@@ -234,7 +236,7 @@ export default function LoginScreen() {
               <Text style={{ color: "#1A1A1A", fontSize: 11, fontWeight: "900" }}>G</Text>
             </View>
             <Text style={{ color: "#E6F3F3", fontWeight: "600", fontSize: 14 }}>Continuar con Google</Text>
-          </TouchableOpacity>
+          </PressableScale>
 
           {/* Register link */}
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 16, gap: 4 }}>

@@ -30,6 +30,7 @@ import { Ionicons } from "@expo/vector-icons"
 import Avatar from "@/components/Avatar"
 import StatusDot from "@/components/StatusDot"
 import ModalShell from "@/components/ModalShell"
+import PressableScale from "@/components/PressableScale"
 
 const SERVER_NAME_MAX = 100
 
@@ -369,9 +370,11 @@ export default function ChatScreen() {
                   style={{ position: "absolute", backgroundColor: "#37D6C0", borderTopRightRadius: 2, borderBottomRightRadius: 2, left: -11, top: 6, bottom: 6, width: 3 }}
                 />
               )}
-              <TouchableOpacity
+              <PressableScale
                 onPress={() => setActiveServer(s.id)}
                 accessibilityLabel={s.name}
+                pressedScale={0.88}
+                hoverStyle={{ borderColor: "rgba(55,214,192,0.55)" }}
                 style={{
                   alignItems: "center",
                   justifyContent: "center",
@@ -425,7 +428,7 @@ export default function ChatScreen() {
                     </Text>
                   </View>
                 ) : null}
-              </TouchableOpacity>
+              </PressableScale>
             </View>
           ))}
           <View
@@ -433,9 +436,11 @@ export default function ChatScreen() {
               ? { onMouseEnter: showTooltip("Agregar servidor"), onMouseLeave: hideTooltip }
               : {})}
           >
-            <TouchableOpacity
+            <PressableScale
               onPress={() => openAddModal("create")}
               accessibilityLabel="Agregar servidor"
+              pressedScale={0.88}
+              hoverStyle={{ backgroundColor: "rgba(55,214,192,0.14)", borderColor: "rgba(55,214,192,0.55)" }}
               style={{
                 alignItems: "center",
                 justifyContent: "center",
@@ -448,7 +453,7 @@ export default function ChatScreen() {
               }}
             >
               <Text style={{ color: "#37D6C0", fontSize: 18 }}>+</Text>
-            </TouchableOpacity>
+            </PressableScale>
           </View>
         </ScrollView>
       </View>
@@ -498,8 +503,9 @@ export default function ChatScreen() {
             {servers.find((s) => s.id === activeServer)?.name ?? ""}
           </Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-            <TouchableOpacity
+            <PressableScale
               onPress={handleGenerateInvite}
+              hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
               style={{
                 flexDirection: "row",
                 alignItems: "center",
@@ -512,10 +518,11 @@ export default function ChatScreen() {
             >
               <Ionicons name="person-add-outline" size={13} color="#37D6C0" />
               <Text style={{ color: "#37D6C0", fontSize: 11.5, fontWeight: "700" }}>Invitar</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
+            </PressableScale>
+            <PressableScale
               onPress={openLeaveModal}
               accessibilityLabel="Salir del servidor"
+              hoverStyle={{ backgroundColor: "rgba(255,127,114,0.14)" }}
               style={{
                 flexDirection: "row",
                 alignItems: "center",
@@ -528,7 +535,7 @@ export default function ChatScreen() {
             >
               <Ionicons name="exit-outline" size={13} color="#8DA8AC" />
               <Text style={{ color: "#8DA8AC", fontSize: 11.5, fontWeight: "600" }}>Salir</Text>
-            </TouchableOpacity>
+            </PressableScale>
           </View>
         </View>
 
@@ -543,9 +550,11 @@ export default function ChatScreen() {
               {cat.channels.map((ch) => {
                 const active = activeChannel === ch.id
                 return (
-                  <TouchableOpacity
+                  <PressableScale
                     key={ch.id}
                     onPress={() => setActiveChannel(ch.id)}
+                    pressedScale={1}
+                    hoverStyle={active ? undefined : { backgroundColor: "rgba(255,255,255,0.05)" }}
                     style={{
                       flexDirection: "row",
                       alignItems: "center",
@@ -578,7 +587,7 @@ export default function ChatScreen() {
                         </Text>
                       </View>
                     ) : null}
-                  </TouchableOpacity>
+                  </PressableScale>
                 )
               })}
             </View>
@@ -648,7 +657,33 @@ export default function ChatScreen() {
         <FlatList
           data={messages}
           keyExtractor={(m) => m.id}
-          contentContainerStyle={{ padding: 16, gap: 13 }}
+          contentContainerStyle={
+            messages.length === 0
+              ? { flexGrow: 1, justifyContent: "center", alignItems: "center", padding: 24 }
+              : { padding: 16, gap: 13 }
+          }
+          ListEmptyComponent={
+            <View style={{ alignItems: "center", gap: 10, maxWidth: 320 }}>
+              <View
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 9999,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: "rgba(55,214,192,0.12)",
+                }}
+              >
+                <Ionicons name="chatbubbles-outline" size={26} color="#37D6C0" />
+              </View>
+              <Text style={{ color: "#E6F3F3", fontSize: 15, fontWeight: "700" }}>
+                Todavía no hay mensajes
+              </Text>
+              <Text style={{ color: "#8DA8AC", fontSize: 12.5, textAlign: "center", lineHeight: 18 }}>
+                Escribí el primero en #{channel?.name ?? "este canal"} y arrancá la conversación.
+              </Text>
+            </View>
+          }
           renderItem={({ item: msg }) => (
             <View style={{ flexDirection: "row", gap: 10 }}>
               <Avatar initials={msg.author.split(" ").map((n) => n[0]).join("")} />
@@ -736,9 +771,14 @@ export default function ChatScreen() {
               onSubmitEditing={handleSend}
               returnKeyType="send"
             />
-            <TouchableOpacity onPress={handleSend}>
+            <PressableScale
+              onPress={handleSend}
+              pressedScale={0.92}
+              style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}
+              hoverStyle={{ backgroundColor: "rgba(55,214,192,0.12)" }}
+            >
               <Text style={{ color: "#37D6C0", fontWeight: "600", fontSize: 11 }}>Enviar</Text>
-            </TouchableOpacity>
+            </PressableScale>
           </View>
         </View>
       </View>
@@ -942,13 +982,13 @@ export default function ChatScreen() {
                 </TouchableOpacity>
               ) : null}
             </TouchableOpacity>
-            <TouchableOpacity
+            <PressableScale
               onPress={handleCreateServer}
               disabled={createBusy}
               style={[PRIMARY_BTN, { marginTop: 18, opacity: createBusy ? 0.7 : 1 }]}
             >
               {createBusy ? <ActivityIndicator color="#04211D" /> : <Text style={PRIMARY_TXT}>Crear servidor</Text>}
-            </TouchableOpacity>
+            </PressableScale>
           </>
         ) : (
           <>
@@ -971,13 +1011,13 @@ export default function ChatScreen() {
               autoCapitalize="none"
               style={[FIELD, { marginBottom: 18 }]}
             />
-            <TouchableOpacity
+            <PressableScale
               onPress={handleJoin}
               disabled={joinBusy}
               style={[PRIMARY_BTN, { opacity: joinBusy ? 0.7 : 1 }]}
             >
               {joinBusy ? <ActivityIndicator color="#04211D" /> : <Text style={PRIMARY_TXT}>Unirse</Text>}
-            </TouchableOpacity>
+            </PressableScale>
           </>
         )}
       </ModalShell>
@@ -1016,9 +1056,9 @@ export default function ChatScreen() {
                 {invite.url}
               </Text>
             </View>
-            <TouchableOpacity onPress={handleCopyInvite} style={PRIMARY_BTN}>
+            <PressableScale onPress={handleCopyInvite} style={PRIMARY_BTN}>
               <Text style={PRIMARY_TXT}>{copied ? "¡Copiado!" : "Copiar link"}</Text>
-            </TouchableOpacity>
+            </PressableScale>
           </>
         ) : null}
       </ModalShell>
@@ -1044,9 +1084,10 @@ export default function ChatScreen() {
         ) : null}
 
         <View style={{ flexDirection: "row", gap: 8 }}>
-          <TouchableOpacity
+          <PressableScale
             onPress={() => setLeaveOpen(false)}
             disabled={leaveBusy}
+            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
             style={{
               flex: 1,
               borderRadius: 10,
@@ -1058,8 +1099,8 @@ export default function ChatScreen() {
             }}
           >
             <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
+          </PressableScale>
+          <PressableScale
             onPress={handleLeaveServer}
             disabled={leaveBusy}
             style={{
@@ -1076,7 +1117,7 @@ export default function ChatScreen() {
             ) : (
               <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>Abandonar</Text>
             )}
-          </TouchableOpacity>
+          </PressableScale>
         </View>
       </ModalShell>
     </View>

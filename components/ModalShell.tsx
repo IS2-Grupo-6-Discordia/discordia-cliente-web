@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import type { ReactNode } from "react"
 import { View, Text, TouchableOpacity, Modal, Platform } from "react-native"
 
@@ -21,6 +22,17 @@ export default function ModalShell({
   children,
   maxWidth = 380,
 }: ModalShellProps) {
+  // Drive a small pop-in for the card each time the modal opens (web transition;
+  // on native the Modal's own fade covers the appearance).
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    if (visible) {
+      const id = requestAnimationFrame(() => setShown(true))
+      return () => cancelAnimationFrame(id)
+    }
+    setShown(false)
+  }, [visible])
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <TouchableOpacity
@@ -47,7 +59,14 @@ export default function ModalShell({
             borderWidth: 1,
             borderColor: "rgba(255,255,255,0.10)",
             ...(Platform.OS === "web"
-              ? ({ boxShadow: "0 24px 60px -20px rgba(0,0,0,0.7)" } as object)
+              ? ({
+                  boxShadow: "0 24px 60px -20px rgba(0,0,0,0.7)",
+                  opacity: shown ? 1 : 0,
+                  transform: [{ scale: shown ? 1 : 0.96 }],
+                  transitionProperty: "opacity, transform",
+                  transitionDuration: "200ms",
+                  transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)",
+                } as object)
               : { shadowColor: "#000", shadowOpacity: 0.5, shadowRadius: 30, shadowOffset: { width: 0, height: 20 } }),
           }}
         >

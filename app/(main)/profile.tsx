@@ -13,6 +13,7 @@ import * as ImagePicker from "expo-image-picker"
 import { useRouter } from "expo-router"
 import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
+import PressableScale from "@/components/PressableScale"
 import { getMe, updateProfile, updateAvatar } from "@/api/auth"
 import { ApiError, friendlyError } from "@/api/client"
 import Avatar from "@/components/Avatar"
@@ -306,10 +307,11 @@ export default function ProfileScreen() {
                     <View style={{ borderRadius: 9999, borderWidth: 4, borderColor: CARD_BG }}>
                       <Avatar initials={display.avatar} size={92} uri={display.avatarUrl} />
                     </View>
-                    <TouchableOpacity
+                    <PressableScale
                       onPress={handleChangePhoto}
                       disabled={avatarLoading}
                       accessibilityLabel="Cambiar foto"
+                      pressedScale={0.9}
                       style={{
                         position: "absolute",
                         right: -2,
@@ -329,7 +331,7 @@ export default function ProfileScreen() {
                       ) : (
                         <Ionicons name="camera" size={15} color="#04211D" />
                       )}
-                    </TouchableOpacity>
+                    </PressableScale>
                   </View>
                 </View>
 
@@ -370,9 +372,10 @@ export default function ProfileScreen() {
                     </Text>
 
                     <View style={{ flexDirection: "row", gap: 8 }}>
-                      <TouchableOpacity
+                      <PressableScale
                         onPress={cancelEditing}
                         disabled={saving}
+                        hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
                         style={{
                           flex: 1,
                           borderRadius: 10,
@@ -386,8 +389,8 @@ export default function ProfileScreen() {
                         <Text style={{ fontWeight: "700", fontSize: 14, color: "#E6F3F3" }}>
                           Cancelar
                         </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
+                      </PressableScale>
+                      <PressableScale
                         onPress={handleSave}
                         disabled={saving}
                         style={{
@@ -402,7 +405,7 @@ export default function ProfileScreen() {
                         <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>
                           {saving ? "Guardando..." : "Guardar"}
                         </Text>
-                      </TouchableOpacity>
+                      </PressableScale>
                     </View>
                   </>
                 ) : (
@@ -428,7 +431,7 @@ export default function ProfileScreen() {
                     />
                     {memberSince ? <InfoRow label="Miembro desde" value={memberSince} muted /> : null}
 
-                    <TouchableOpacity
+                    <PressableScale
                       onPress={startEditing}
                       style={{
                         width: "100%",
@@ -442,7 +445,7 @@ export default function ProfileScreen() {
                       <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>
                         Editar perfil
                       </Text>
-                    </TouchableOpacity>
+                    </PressableScale>
                   </>
                 )}
               </>

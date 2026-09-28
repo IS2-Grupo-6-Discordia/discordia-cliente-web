@@ -18,12 +18,26 @@ function colorFor(seed: string): string {
   return PALETTE[hash % PALETTE.length]
 }
 
-// Turn a #RRGGBB into an rgba() string at the given alpha.
-function tint(hex: string, alpha: number): string {
+// Opaque dark surface the placeholder tint is composited over. Keeping the
+// fill opaque means the avatar never lets the background bleed through — which
+// is what made it look split when it overlapped the profile banner.
+const SURFACE = "#16242E"
+
+// Blend a #RRGGBB over the opaque SURFACE at the given ratio, returning an
+// opaque #RRGGBB. This preserves the per-person color identity while staying
+// solid on any background.
+function mix(hex: string, ratio: number): string {
+  const br = parseInt(SURFACE.slice(1, 3), 16)
+  const bg = parseInt(SURFACE.slice(3, 5), 16)
+  const bb = parseInt(SURFACE.slice(5, 7), 16)
   const r = parseInt(hex.slice(1, 3), 16)
   const g = parseInt(hex.slice(3, 5), 16)
   const b = parseInt(hex.slice(5, 7), 16)
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+  const ch = (fg: number, base: number) =>
+    Math.round(fg * ratio + base * (1 - ratio))
+      .toString(16)
+      .padStart(2, "0")
+  return `#${ch(r, br)}${ch(g, bg)}${ch(b, bb)}`
 }
 
 export default function Avatar({ initials, size = 28, uri }: AvatarProps) {
@@ -44,11 +58,11 @@ export default function Avatar({ initials, size = 28, uri }: AvatarProps) {
         width: size,
         height: size,
         borderRadius: 9999,
-        backgroundColor: tint(color, 0.22),
+        backgroundColor: mix(color, 0.22),
         alignItems: "center",
         justifyContent: "center",
         borderWidth: 1,
-        borderColor: tint(color, 0.45),
+        borderColor: mix(color, 0.45),
       }}
     >
       <Text

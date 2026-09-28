@@ -13,6 +13,7 @@ import {
 import type { ViewStyle, TextStyle } from "react-native"
 import * as ImagePicker from "expo-image-picker"
 import * as Clipboard from "expo-clipboard"
+import { useRouter } from "expo-router"
 import {
   getServers,
   getCategories,
@@ -95,6 +96,7 @@ const NOTICE_OK: ViewStyle = {
 }
 
 export default function ChatScreen() {
+  const router = useRouter()
   const [activeServer, setActiveServer] = useState("1")
   const [activeChannel, setActiveChannel] = useState("general")
   const [showMembers, setShowMembers] = useState(false)
@@ -685,12 +687,31 @@ export default function ChatScreen() {
               </Text>
             </View>
           }
-          renderItem={({ item: msg }) => (
+          renderItem={({ item: msg }) => {
+            const authorInitials = msg.author.split(" ").map((n) => n[0]).join("")
+            // Only wire navigation when the message carries a public author id.
+            // Mock messages don't, so their authors stay non-tappable for now.
+            const goToAuthor = msg.authorId
+              ? () => router.push(`/users/${msg.authorId}`)
+              : undefined
+            return (
             <View style={{ flexDirection: "row", gap: 10 }}>
-              <Avatar initials={msg.author.split(" ").map((n) => n[0]).join("")} />
+              <TouchableOpacity
+                onPress={goToAuthor}
+                disabled={!goToAuthor}
+                accessibilityLabel={goToAuthor ? `Ver perfil de ${msg.author}` : undefined}
+              >
+                <Avatar initials={authorInitials} />
+              </TouchableOpacity>
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
-                  <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 12.5 }}>{msg.author}</Text>
+                  <Text
+                    onPress={goToAuthor}
+                    accessibilityLabel={goToAuthor ? `Ver perfil de ${msg.author}` : undefined}
+                    style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 12.5 }}
+                  >
+                    {msg.author}
+                  </Text>
                   {msg.role ? (
                     <View style={{ paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4, backgroundColor: `${msg.roleColor}22` }}>
                       <Text style={{ fontSize: 9, fontWeight: "800", color: msg.roleColor, textTransform: "uppercase", letterSpacing: 0.5 }}>
@@ -737,7 +758,8 @@ export default function ChatScreen() {
                 ) : null}
               </View>
             </View>
-          )}
+            )
+          }}
         />
 
         {/* Typing indicator: demo, shown only in the example server's #anuncios */}
@@ -851,8 +873,10 @@ export default function ChatScreen() {
                     const nameColor = role.color === "#8DA8AC" ? "#E6F3F3" : role.color
                     const hovered = hoveredMember === m.id
                     return (
-                      <View
+                      <TouchableOpacity
                         key={m.id}
+                        onPress={() => router.push(`/users/${m.id}`)}
+                        accessibilityLabel={`Ver perfil de ${m.name}`}
                         {...(Platform.OS === "web"
                           ? {
                               onMouseEnter: () => setHoveredMember(m.id),
@@ -882,7 +906,7 @@ export default function ChatScreen() {
                             {m.status === "online" ? "En línea" : m.status === "away" ? "Ausente" : "Desconectado/a"}
                           </Text>
                         </View>
-                      </View>
+                      </TouchableOpacity>
                     )
                   })}
                 </View>

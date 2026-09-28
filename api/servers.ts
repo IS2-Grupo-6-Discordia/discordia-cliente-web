@@ -1,5 +1,6 @@
+import { getUsersBatch } from "./auth"
 import { api, apiUpload } from "./client"
-import type { Server, Category, RoleGroup, Invite } from "./types"
+import type { Server, Category, RoleGroup, Invite, ServerMember } from "./types"
 
 // Reads always stay mocked: the backend does NOT expose GET /servers,
 // GET categories, or GET roles endpoints yet, so there is nothing to call.
@@ -317,4 +318,39 @@ export async function resolveInvite(code: string): Promise<Invite> {
 
   const res = await api<BackendInviteOut>(`/invites/${encodeURIComponent(code)}`)
   return toInvite(res)
+}
+
+interface BackendServerMember {
+  user_id: string
+  role: "owner" | "member"
+  joined_at: string
+}
+
+// Lists a server's members (HU-7 support: lets the owner pick who to transfer
+// ownership to). The servers backend only stores ids + roles, so names and
+// avatars are hydrated from the auth service in a single batch call and merged.
+// A member whose public profile can't be resolved still appears, with a neutral
+// fallback name, so the roster is never silently short.
+export async function getServerMembers(serverId: string): Promise<ServerMember[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(500)
+    return []
+  }
+
+  const rows = await api<BackendServerMember[]>(`/servers/${serverId}/members`)
+  const profiles = await getUsersBatch(rows.map((row) => row.user_id))
+  const byId = new Map(profiles.map((profile) => [profile.id, profile]))
+
+  return rows.map((row) => {
+    const profile = byId.get(row.user_id)
+    const name = profile?.name ?? "Usuario"
+    return {
+      userId: row.user_id,
+      role: row.role,
+      name,
+      avatar: abbrFor(name),
+      avatarUrl: profile?.avatarUrl ?? null,
+      joinedAt: row.joined_at,
+    }
+  })
 }

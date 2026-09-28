@@ -8,6 +8,16 @@ export interface User {
   createdAt?: string
 }
 
+// Another user's PUBLIC profile. Explicitly carries no private data (no email,
+// no createdAt): the backend endpoint that feeds this type only returns fields
+// that are safe to show to anyone.
+export interface PublicUser {
+  id: string
+  name: string
+  bio?: string | null
+  avatarUrl?: string | null
+}
+
 export interface AuthResponse {
   token: string
   user: User
@@ -22,6 +32,18 @@ export interface Server {
   mention?: number
   iconUrl?: string | null
   ownerId?: string
+}
+
+// A real server member, from the servers backend (user id + role) hydrated with
+// the public name/avatar from the auth service. Distinct from `Member`, which is
+// the mock roster shape used by the demo UI.
+export interface ServerMember {
+  userId: string
+  role: "owner" | "member"
+  name: string
+  avatar: string
+  avatarUrl: string | null
+  joinedAt: string
 }
 
 export interface Invite {
@@ -66,6 +88,9 @@ export interface RoleGroup {
 export interface Message {
   id: string
   author: string
+  // Public id of the author, when known. Used to open their public profile.
+  // Mock messages don't carry it, so their authors aren't tappable yet.
+  authorId?: string
   color: string
   time: string
   text: string

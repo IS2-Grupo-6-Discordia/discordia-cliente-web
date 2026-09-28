@@ -137,6 +137,10 @@ export default function MainLayout() {
         name="profile"
         options={{ href: null, title: "Perfil" }}
       />
+      <Tabs.Screen
+        name="users/[id]"
+        options={{ href: null, title: "Perfil" }}
+      />
     </Tabs>
   )
 }

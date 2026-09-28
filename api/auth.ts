@@ -1,5 +1,5 @@
 import { api, apiUpload, ApiError, getRefreshToken, setRefreshToken, setToken } from "./client"
-import type { AuthResponse, User } from "./types"
+import type { AuthResponse, PublicUser, User } from "./types"
 
 const USE_MOCK = !process.env.EXPO_PUBLIC_API_URL
 
@@ -42,6 +42,24 @@ function toUser(backendUser: BackendUser): User {
     avatar: initials(backendUser.name),
     avatarUrl: backendUser.avatar_url ?? null,
     createdAt: backendUser.created_at,
+  }
+}
+
+// Only the public fields the backend exposes for other users. No email, no
+// created_at: this shape is intentionally narrower than BackendUser.
+interface BackendPublicUser {
+  id: string
+  name: string
+  bio?: string | null
+  avatar_url?: string | null
+}
+
+function toPublicUser(backendUser: BackendPublicUser): PublicUser {
+  return {
+    id: backendUser.id,
+    name: backendUser.name,
+    bio: backendUser.bio ?? null,
+    avatarUrl: backendUser.avatar_url ?? null,
   }
 }
 
@@ -194,6 +212,41 @@ export async function getMe(): Promise<User> {
 
   const res = await api<BackendUser>("/auth/users/me")
   return toUser(res)
+}
+
+// Fetches another user's PUBLIC profile by id. Mirrors getMe()'s request style,
+// but hits the per-user route and maps only the public fields. The backend (via
+// the gateway) returns 404 when the id doesn't exist.
+export async function getUserById(id: string): Promise<PublicUser> {
+  if (USE_MOCK) {
+    await mockDelay(500)
+    // There's no mock store of other users' public profiles, so any lookup
+    // resolves as "not found" -> the same 404 the real backend returns for a
+    // missing id. The screen renders its empty state instead of fake data.
+    const detail = "No encontramos este usuario."
+    throw new ApiError(404, detail, detail)
+  }
+
+  const res = await api<BackendPublicUser>(`/auth/users/${id}`)
+  return toPublicUser(res)
+}
+
+// Fetches PUBLIC profiles for several users in one request. Used to hydrate names
+// and avatars for lists that only carry user ids -- e.g. a server's member roster,
+// where the servers service only stores ids and roles. Order is not guaranteed, so
+// callers should match results back to their ids.
+export async function getUsersBatch(ids: string[]): Promise<PublicUser[]> {
+  if (ids.length === 0) return []
+  if (USE_MOCK) {
+    await mockDelay(300)
+    return []
+  }
+
+  const res = await api<{ users: BackendPublicUser[] }>("/auth/users/batch", {
+    method: "POST",
+    body: JSON.stringify({ user_ids: ids }),
+  })
+  return res.users.map(toPublicUser)
 }
 
 // Accepts a native file descriptor ({uri,name,type}) or, on web, a real Blob.

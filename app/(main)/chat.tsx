@@ -97,8 +97,11 @@ const NOTICE_OK: ViewStyle = {
 
 export default function ChatScreen() {
   const router = useRouter()
-  const [activeServer, setActiveServer] = useState("1")
-  const [activeChannel, setActiveChannel] = useState("general")
+  // No server is selected until the real list loads. Never default to a mock id,
+  // or the app boots into a phantom server (and its mock channels/messages) even
+  // when the user has none.
+  const [activeServer, setActiveServer] = useState("")
+  const [activeChannel, setActiveChannel] = useState("")
   const [showMembers, setShowMembers] = useState(false)
   const [input, setInput] = useState("")
 
@@ -148,21 +151,38 @@ export default function ChatScreen() {
   const [leaveError, setLeaveError] = useState("")
 
   useEffect(() => {
-    getServers().then(setServers)
+    getServers().then((list) => {
+      setServers(list)
+      // Land on the first real server the user belongs to. If they have none, no
+      // server stays selected and the screen shows its "create or join" state.
+      setActiveServer((current) => current || list[0]?.id || "")
+    })
   }, [])
 
   useEffect(() => {
+    if (!activeServer) {
+      // No server selected (e.g. the user has none): clear everything so no mock
+      // channel or roster leaks through.
+      setCategories([])
+      setRoles([])
+      setActiveChannel("")
+      return
+    }
     getCategories(activeServer).then((cats) => {
       setCategories(cats)
       // Switch focus to the new server's first text channel so we never keep
       // showing the previous server's channel (and its messages).
       const firstText = cats.flatMap((c) => c.channels).find((c) => c.type === "text")
-      if (firstText) setActiveChannel(firstText.id)
+      setActiveChannel(firstText ? firstText.id : "")
     })
     getRoles(activeServer).then(setRoles)
   }, [activeServer])
 
   useEffect(() => {
+    if (!activeChannel) {
+      setMessages([])
+      return
+    }
     getMessages(activeChannel).then(setMessages)
   }, [activeChannel])
 
@@ -626,7 +646,7 @@ export default function ChatScreen() {
           style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.13)" }}
         >
           <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 13.5 }}>
-            # {channel?.name}
+            {channel ? `# ${channel.name}` : "Discordia"}
           </Text>
           <Text style={{ color: "#8DA8AC", flex: 1, marginLeft: 8, fontSize: 11 }} numberOfLines={1}>
             Coordinación general de la cursada
@@ -680,10 +700,12 @@ export default function ChatScreen() {
                 <Ionicons name="chatbubbles-outline" size={26} color="#37D6C0" />
               </View>
               <Text style={{ color: "#E6F3F3", fontSize: 15, fontWeight: "700" }}>
-                Todavía no hay mensajes
+                {activeServer ? "Todavía no hay mensajes" : "No tenés servidores todavía"}
               </Text>
               <Text style={{ color: "#8DA8AC", fontSize: 12.5, textAlign: "center", lineHeight: 18 }}>
-                Escribí el primero en #{channel?.name ?? "este canal"} y arrancá la conversación.
+                {activeServer
+                  ? `Escribí el primero en #${channel?.name ?? "este canal"} y arrancá la conversación.`
+                  : "Creá uno con el botón + o unite con una invitación."}
               </Text>
             </View>
           }

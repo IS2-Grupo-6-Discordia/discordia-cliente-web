@@ -17,7 +17,7 @@ import { useRouter } from "expo-router"
 import {
   getServers,
   getCategories,
-  getRoles,
+  getServerMembers,
   getMessages,
   sendMessage,
   createServer,
@@ -25,7 +25,7 @@ import {
   joinServer,
   leaveServer,
 } from "@/api"
-import type { Server, Category, RoleGroup, Message, Invite } from "@/api/types"
+import type { Server, Category, RoleGroup, Member, ServerMember, Message, Invite } from "@/api/types"
 import { ApiError, friendlyError } from "@/api/client"
 import { Ionicons } from "@expo/vector-icons"
 import Avatar from "@/components/Avatar"
@@ -42,6 +42,29 @@ const UUID_RE =
 
 function isRealServerId(id: string): boolean {
   return UUID_RE.test(id)
+}
+
+// Groups real server members (from getServerMembers) into the role sections the
+// member panel renders. The backend only knows "owner" / "member" and tracks no
+// presence, so everyone is shown as online for now (there is no presence service).
+function membersToRoleGroups(members: ServerMember[]): RoleGroup[] {
+  const toMember = (m: ServerMember, color: string): Member => ({
+    id: m.userId,
+    name: m.name,
+    avatar: m.avatar,
+    color,
+    status: "online",
+  })
+  const owners = members.filter((m) => m.role === "owner")
+  const rest = members.filter((m) => m.role !== "owner")
+  const groups: RoleGroup[] = []
+  if (owners.length > 0) {
+    groups.push({ name: "Owner", color: "#37D6C0", members: owners.map((m) => toMember(m, "#37D6C0")) })
+  }
+  if (rest.length > 0) {
+    groups.push({ name: "Miembros", color: "#8DA8AC", members: rest.map((m) => toMember(m, "#8DA8AC")) })
+  }
+  return groups
 }
 
 const MOCK_SERVER_NOTICE =
@@ -175,7 +198,10 @@ export default function ChatScreen() {
       const firstText = cats.flatMap((c) => c.channels).find((c) => c.type === "text")
       setActiveChannel(firstText ? firstText.id : "")
     })
-    getRoles(activeServer).then(setRoles)
+    // Real roster from the backend (owner + members), hydrated with names/avatars.
+    getServerMembers(activeServer)
+      .then((members) => setRoles(membersToRoleGroups(members)))
+      .catch(() => setRoles([]))
   }, [activeServer])
 
   useEffect(() => {
@@ -649,7 +675,7 @@ export default function ChatScreen() {
             {channel ? `# ${channel.name}` : "Discordia"}
           </Text>
           <Text style={{ color: "#8DA8AC", flex: 1, marginLeft: 8, fontSize: 11 }} numberOfLines={1}>
-            Coordinación general de la cursada
+            {servers.find((s) => s.id === activeServer)?.name ?? ""}
           </Text>
           <TouchableOpacity
             onPress={() => setShowMembers((o) => !o)}

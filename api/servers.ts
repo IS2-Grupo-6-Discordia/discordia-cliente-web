@@ -81,11 +81,14 @@ const MOCK_ROLES: RoleGroup[] = [
   },
 ]
 
-// NOTE: getServers/getCategories/getRoles have no backend endpoint yet, so they
-// stay mocked forever (READ_USE_MOCK). Do not wire them to the API.
+// getServers now reads REAL data: the backend exposes GET /servers (the user's own
+// memberships), so servers created or joined persist across reloads. Only when no API
+// URL is configured (pure offline/mock mode) does it fall back to the example server.
+// getCategories/getRoles stay mocked because those endpoints still don't exist.
 export async function getServers(): Promise<Server[]> {
-  if (READ_USE_MOCK) return MOCK_SERVERS
-  return api<Server[]>("/servers")
+  if (WRITE_USE_MOCK) return MOCK_SERVERS
+  const res = await api<BackendServerSummary[]>("/servers")
+  return res.map(toServer)
 }
 
 export async function getCategories(serverId: string): Promise<Category[]> {
@@ -140,12 +143,17 @@ interface BackendChannel {
   type: "text" | "voice"
 }
 
-interface BackendServerOut {
+// A server as returned by GET /servers (the sidebar list): no channels.
+interface BackendServerSummary {
   id: string
   name: string
   icon_url: string | null
   owner_id: string
   created_at: string
+}
+
+// A server as returned by create/join: the summary plus its channels.
+interface BackendServerOut extends BackendServerSummary {
   channels: BackendChannel[]
 }
 
@@ -179,7 +187,7 @@ function inviteUrl(code: string): string {
 }
 
 // Maps a backend ServerOut/JoinedServerOut into the rail-friendly Server shape.
-function toServer(backend: BackendServerOut): Server {
+function toServer(backend: BackendServerSummary): Server {
   return {
     id: backend.id,
     name: backend.name,

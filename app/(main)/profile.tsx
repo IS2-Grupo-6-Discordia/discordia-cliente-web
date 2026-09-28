@@ -12,7 +12,7 @@ import {
 import * as ImagePicker from "expo-image-picker"
 import { useAuth } from "@/context/AuthContext"
 import { getMe, updateProfile, updateAvatar } from "@/api/auth"
-import { ApiError } from "@/api/client"
+import { ApiError, friendlyError } from "@/api/client"
 import Avatar from "@/components/Avatar"
 import type { User } from "@/api/types"
 
@@ -98,8 +98,7 @@ export default function ProfileScreen() {
         setUser(fresh)
       } catch (err) {
         if (!active) return
-        const msg = err instanceof Error ? err.message : ""
-        setLoadError(msg || "No pudimos cargar tu perfil.")
+        setLoadError(friendlyError(err))
       } finally {
         if (active) setLoading(false)
       }
@@ -153,8 +152,7 @@ export default function ProfileScreen() {
       setUser(updated)
       setEditing(false)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : ""
-      setFormError(msg || "No pudimos guardar los cambios.")
+      setFormError(friendlyError(err))
     } finally {
       setSaving(false)
     }
@@ -199,8 +197,7 @@ export default function ProfileScreen() {
       if (err instanceof ApiError && err.status === 422) {
         setAvatarError("La imagen no es válida o es demasiado grande.")
       } else {
-        const msg = err instanceof Error ? err.message : ""
-        setAvatarError(msg || "No pudimos actualizar tu foto.")
+        setAvatarError(friendlyError(err))
       }
     } finally {
       setAvatarLoading(false)

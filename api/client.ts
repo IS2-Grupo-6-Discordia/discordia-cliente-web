@@ -49,6 +49,59 @@ function extractDetailMessage(detail: unknown, fallback: string): string {
   return fallback
 }
 
+// Generic, user-safe messages per HTTP status (Spanish, Rioplatense).
+const GENERIC_ERROR_BY_STATUS: Record<number, string> = {
+  400: "Revisá los datos e intentá de nuevo.",
+  422: "Revisá los datos e intentá de nuevo.",
+  401: "Tu sesión expiró. Iniciá sesión de nuevo.",
+  403: "No tenés permiso para hacer esto.",
+  404: "No encontramos lo que buscabas.",
+  408: "El servidor tardó demasiado en responder. Probá de nuevo.",
+  504: "El servidor tardó demasiado en responder. Probá de nuevo.",
+}
+
+function genericForStatus(status: number): string {
+  const known = GENERIC_ERROR_BY_STATUS[status]
+  if (known) return known
+  if (status >= 500) return "Algo salió mal en el servidor. Probá de nuevo en unos segundos."
+  return "Ocurrió un error. Probá de nuevo."
+}
+
+// Heuristic guard: raw FastAPI/pydantic validation fragments (English) must
+// never reach the user, even on the rare chance one arrives as a string detail.
+function looksTechnical(msg: string): boolean {
+  return /input should|invalid length|value is not|field required|ensure this|not a valid|expected length|value_error|type_error/i.test(
+    msg,
+  )
+}
+
+// Central mapping from any thrown error to a single, user-safe Spanish string.
+// The raw error is logged for debugging but never surfaced verbatim to the UI.
+export function friendlyError(err: unknown): string {
+  // Keep the technical detail available for dev/debug without showing it.
+  console.warn("[friendlyError]", err)
+
+  if (err instanceof ApiError) {
+    // Business errors (401/403/404/409...) arrive as a human Spanish string in
+    // `detail`; 422 validation errors arrive as an array/object, and 5xx are
+    // never trustworthy for display -> fall back to a generic message.
+    if (err.status < 500 && typeof err.detail === "string") {
+      const detail = err.detail.trim()
+      if (detail !== "" && !looksTechnical(detail)) {
+        return detail
+      }
+    }
+    return genericForStatus(err.status)
+  }
+
+  // Network failures throw a TypeError; timeouts (AbortController) an AbortError.
+  if (err instanceof TypeError || (err instanceof Error && err.name === "AbortError")) {
+    return "No pudimos conectarnos. Revisá tu conexión e intentá de nuevo."
+  }
+
+  return "Ocurrió un error inesperado. Probá de nuevo."
+}
+
 export async function api<T>(
   path: string,
   options: RequestInit = {},

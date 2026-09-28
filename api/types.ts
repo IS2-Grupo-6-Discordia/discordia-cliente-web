@@ -20,6 +20,19 @@ export interface Server {
   color: string
   unread?: boolean
   mention?: number
+  iconUrl?: string | null
+  ownerId?: string
+}
+
+export interface Invite {
+  id: string
+  code: string
+  url: string
+  serverId: string
+  expiresAt?: string | null
+  maxUses?: number | null
+  uses: number
+  createdAt: string
 }
 
 export interface Channel {

@@ -6,7 +6,9 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "warmup": "node scripts/warmup.mjs",
+    "preweb": "node scripts/warmup.mjs"
   },
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",
@@ -14,6 +16,7 @@
     "@react-native-async-storage/async-storage": "~2.1.0",
     "expo": "~52.0.0",
     "expo-asset": "~11.0.5",
+    "expo-clipboard": "~7.0.1",
     "expo-constants": "~17.0.0",
     "expo-font": "~13.0.0",
     "expo-image-picker": "~16.0.6",

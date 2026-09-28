@@ -65,7 +65,9 @@ export async function login(
   if (USE_MOCK) {
     await mockDelay(1400)
     if (password === "error") {
-      throw new Error("Email o contraseña incorrectos.")
+      // Mirror the real backend's 401 shape so friendlyError surfaces the same message in mock mode.
+      const detail = "El correo electrónico o la contraseña son incorrectos."
+      throw new ApiError(401, detail, detail)
     }
     const token = "mock-jwt-token-" + Date.now()
     await setToken(token)

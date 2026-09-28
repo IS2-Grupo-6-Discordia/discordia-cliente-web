@@ -12,6 +12,7 @@ import {
 import { useRouter } from "expo-router"
 import { useAuth } from "@/context/AuthContext"
 import { login } from "@/api/auth"
+import { friendlyError } from "@/api/client"
 
 export default function LoginScreen() {
   const { setUser } = useAuth()
@@ -29,7 +30,7 @@ export default function LoginScreen() {
       setUser(res.user)
       router.replace("/(main)/chat")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Email o contraseña incorrectos.")
+      setError(friendlyError(err))
     } finally {
       setLoading(false)
     }

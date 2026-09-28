@@ -11,6 +11,7 @@ import {
 import { useRouter } from "expo-router"
 import { useAuth } from "@/context/AuthContext"
 import { register } from "@/api/auth"
+import { friendlyError } from "@/api/client"
 
 function Req({ met, text }: { met: boolean; text: string }) {
   return (
@@ -67,7 +68,7 @@ export default function RegisterScreen() {
       if (msg === "EMAIL_DUPLICADO") {
         setEmailDupe(true)
       } else {
-        setError(msg || "Error al crear la cuenta.")
+        setError(friendlyError(err))
       }
     } finally {
       setLoading(false)

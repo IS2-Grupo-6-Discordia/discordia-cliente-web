@@ -1,6 +1,6 @@
 import { getUsersBatch } from "./auth"
-import { api, apiUpload } from "./client"
-import type { Server, Category, RoleGroup, Invite, ServerMember } from "./types"
+import { api, apiUpload, ApiError } from "./client"
+import type { Server, Category, RoleGroup, Invite, ServerMember, OwnershipTransfer } from "./types"
 
 // Reads always stay mocked: the backend does NOT expose GET /servers,
 // GET categories, or GET roles endpoints yet, so there is nothing to call.
@@ -361,4 +361,116 @@ export async function getServerMembers(serverId: string): Promise<ServerMember[]
       joinedAt: row.joined_at,
     }
   })
+}
+
+// ---- HU-7: ownership transfer -----------------------------------------------
+
+interface BackendOwnershipTransfer {
+  id: string
+  server_id: string
+  from_user_id: string
+  to_user_id: string
+  status: "pending" | "accepted" | "rejected" | "cancelled"
+  created_at: string
+  resolved_at: string | null
+}
+
+function toOwnershipTransfer(backend: BackendOwnershipTransfer): OwnershipTransfer {
+  return {
+    id: backend.id,
+    serverId: backend.server_id,
+    fromUserId: backend.from_user_id,
+    toUserId: backend.to_user_id,
+    status: backend.status,
+    createdAt: backend.created_at,
+    resolvedAt: backend.resolved_at,
+  }
+}
+
+// Synthetic transfer used in mock mode so the flow is exercisable offline.
+function mockTransfer(
+  serverId: string,
+  toUserId: string,
+  status: OwnershipTransfer["status"],
+): OwnershipTransfer {
+  return {
+    id: "tr-" + Math.random().toString(36).slice(2, 10),
+    serverId,
+    fromUserId: "mock-owner",
+    toUserId,
+    status,
+    createdAt: new Date().toISOString(),
+    resolvedAt: status === "pending" ? null : new Date().toISOString(),
+  }
+}
+
+// Owner starts a transfer of the server's ownership to another member.
+export async function startOwnershipTransfer(
+  serverId: string,
+  toUserId: string,
+): Promise<OwnershipTransfer> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return mockTransfer(serverId, toUserId, "pending")
+  }
+
+  const res = await api<BackendOwnershipTransfer>(
+    `/servers/${serverId}/ownership-transfer`,
+    { method: "POST", body: JSON.stringify({ to_user_id: toUserId }) },
+  )
+  return toOwnershipTransfer(res)
+}
+
+// Returns the pending transfer relevant to the caller (as sender or recipient),
+// or null when there is none. The backend answers 404 for "no pending transfer",
+// which is a normal empty state here, not an error to surface.
+export async function getPendingTransfer(
+  serverId: string,
+): Promise<OwnershipTransfer | null> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(400)
+    return null
+  }
+
+  try {
+    const res = await api<BackendOwnershipTransfer>(
+      `/servers/${serverId}/ownership-transfer`,
+    )
+    return toOwnershipTransfer(res)
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null
+    throw err
+  }
+}
+
+// Recipient accepts the pending transfer: they become the new owner.
+export async function acceptOwnershipTransfer(
+  serverId: string,
+): Promise<OwnershipTransfer> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return mockTransfer(serverId, "mock-recipient", "accepted")
+  }
+
+  const res = await api<BackendOwnershipTransfer>(
+    `/servers/${serverId}/ownership-transfer/accept`,
+    { method: "POST" },
+  )
+  return toOwnershipTransfer(res)
+}
+
+// Recipient rejects the pending transfer: ownership stays with the sender.
+export async function rejectOwnershipTransfer(
+  serverId: string,
+): Promise<OwnershipTransfer> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return mockTransfer(serverId, "mock-recipient", "rejected")
+  }
+
+  const res = await api<BackendOwnershipTransfer>(
+    `/servers/${serverId}/ownership-transfer/reject`,
+    { method: "POST" },
+  )
+  return toOwnershipTransfer(res)
 }

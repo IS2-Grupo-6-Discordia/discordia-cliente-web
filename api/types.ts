@@ -46,6 +46,19 @@ export interface ServerMember {
   joinedAt: string
 }
 
+export type TransferStatus = "pending" | "accepted" | "rejected" | "cancelled"
+
+// HU-7: an ownership transfer between the current owner (from) and a member (to).
+export interface OwnershipTransfer {
+  id: string
+  serverId: string
+  fromUserId: string
+  toUserId: string
+  status: TransferStatus
+  createdAt: string
+  resolvedAt: string | null
+}
+
 export interface Invite {
   id: string
   code: string

@@ -24,9 +24,14 @@ import {
   createInvite,
   joinServer,
   leaveServer,
+  startOwnershipTransfer,
+  getPendingTransfer,
+  acceptOwnershipTransfer,
+  rejectOwnershipTransfer,
 } from "@/api"
-import type { Server, Category, RoleGroup, Member, ServerMember, Message, Invite } from "@/api/types"
+import type { Server, Category, RoleGroup, Member, ServerMember, Message, Invite, OwnershipTransfer } from "@/api/types"
 import { ApiError, friendlyError } from "@/api/client"
+import { useAuth } from "@/context/AuthContext"
 import { Ionicons } from "@expo/vector-icons"
 import Avatar from "@/components/Avatar"
 import StatusDot from "@/components/StatusDot"
@@ -120,6 +125,7 @@ const NOTICE_OK: ViewStyle = {
 
 export default function ChatScreen() {
   const router = useRouter()
+  const { user } = useAuth()
   // No server is selected until the real list loads. Never default to a mock id,
   // or the app boots into a phantom server (and its mock channels/messages) even
   // when the user has none.
@@ -173,6 +179,19 @@ export default function ChatScreen() {
   const [leaveBusy, setLeaveBusy] = useState(false)
   const [leaveError, setLeaveError] = useState("")
 
+  // Ownership transfer (HU-7)
+  // Owner-initiated transfer modal.
+  const [transferOpen, setTransferOpen] = useState(false)
+  const [transferSelectedId, setTransferSelectedId] = useState("")
+  const [transferConfirmName, setTransferConfirmName] = useState("")
+  const [transferBusy, setTransferBusy] = useState(false)
+  const [transferError, setTransferError] = useState("")
+  // Pending transfer relevant to the caller in the active server (banner for the
+  // recipient). null when there is none.
+  const [pendingTransfer, setPendingTransfer] = useState<OwnershipTransfer | null>(null)
+  const [transferActionBusy, setTransferActionBusy] = useState(false)
+  const [bannerError, setBannerError] = useState("")
+
   useEffect(() => {
     getServers().then((list) => {
       setServers(list)
@@ -212,7 +231,107 @@ export default function ChatScreen() {
     getMessages(activeChannel).then(setMessages)
   }, [activeChannel])
 
+  // HU-7: when a real server becomes active, check for a pending ownership
+  // transfer relevant to the caller. The recipient of a pending transfer sees a
+  // banner; everyone else (and mock servers) sees nothing.
+  useEffect(() => {
+    setPendingTransfer(null)
+    setBannerError("")
+    if (!activeServer || !isRealServerId(activeServer)) return
+    let active = true
+    getPendingTransfer(activeServer)
+      .then((transfer) => {
+        if (active) setPendingTransfer(transfer)
+      })
+      .catch(() => {
+        if (active) setPendingTransfer(null)
+      })
+    return () => {
+      active = false
+    }
+  }, [activeServer])
+
   const channel = categories.flatMap((c) => c.channels).find((c) => c.id === activeChannel)
+
+  // Owner of the active server (derived): only the owner may initiate a transfer.
+  // Recomputes whenever `servers` refreshes, so after an accepted transfer the
+  // ex-owner loses the control and the new owner gains it.
+  const isOwner =
+    !!activeServer && servers.find((s) => s.id === activeServer)?.ownerId === user?.id
+
+  // Members eligible to receive ownership: everyone in the roster except the
+  // current owner (the caller). Derived from the already-loaded role groups.
+  const transferCandidates = roles
+    .flatMap((r) => r.members)
+    .filter((m) => m.id !== user?.id)
+
+  const activeServerName = servers.find((s) => s.id === activeServer)?.name ?? ""
+
+  // The recipient sees an actionable banner (accept/reject); the sender sees an
+  // informational one while the transfer stays pending.
+  const isPending = !!pendingTransfer && pendingTransfer.status === "pending" && !!user?.id
+  const isTransferRecipient = isPending && pendingTransfer!.toUserId === user!.id
+  const isTransferSender = isPending && pendingTransfer!.fromUserId === user!.id
+
+  const canTransfer =
+    transferSelectedId !== "" && transferConfirmName.trim() === activeServerName
+
+  const openTransferModal = () => {
+    setTransferSelectedId("")
+    setTransferConfirmName("")
+    setTransferError("")
+    setTransferOpen(true)
+  }
+
+  const handleTransfer = async () => {
+    if (!canTransfer) return
+    setTransferBusy(true)
+    setTransferError("")
+    try {
+      await startOwnershipTransfer(activeServer, transferSelectedId)
+      setTransferOpen(false)
+      // Surface the now-pending transfer (awaiting the recipient's acceptance)
+      // via the sender-side banner, using the same GET the recipient relies on.
+      const pending = await getPendingTransfer(activeServer)
+      setPendingTransfer(pending)
+    } catch (err) {
+      setTransferError(friendlyError(err))
+    } finally {
+      setTransferBusy(false)
+    }
+  }
+
+  const handleAcceptTransfer = async () => {
+    setBannerError("")
+    setTransferActionBusy(true)
+    try {
+      await acceptOwnershipTransfer(activeServer)
+      setPendingTransfer(null)
+      // Refresh so permissions update: owner_id changes, so the new owner now
+      // sees the owner controls; the roster/roles reflect the new owner too.
+      const refreshed = await getServers()
+      setServers(refreshed)
+      const members = await getServerMembers(activeServer)
+      setRoles(membersToRoleGroups(members))
+    } catch (err) {
+      setBannerError(friendlyError(err))
+    } finally {
+      setTransferActionBusy(false)
+    }
+  }
+
+  const handleRejectTransfer = async () => {
+    setBannerError("")
+    setTransferActionBusy(true)
+    try {
+      await rejectOwnershipTransfer(activeServer)
+      setPendingTransfer(null)
+    } catch (err) {
+      setBannerError(friendlyError(err))
+    } finally {
+      setTransferActionBusy(false)
+    }
+  }
 
   const handleSend = async () => {
     if (!input.trim()) return
@@ -584,6 +703,25 @@ export default function ChatScreen() {
               <Ionicons name="exit-outline" size={13} color="#8DA8AC" />
               <Text style={{ color: "#8DA8AC", fontSize: 11.5, fontWeight: "600" }}>Salir</Text>
             </PressableScale>
+            {isOwner && isRealServerId(activeServer) ? (
+              <PressableScale
+                onPress={openTransferModal}
+                accessibilityLabel="Transferir propiedad"
+                hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 5,
+                  paddingHorizontal: 10,
+                  paddingVertical: 5,
+                  borderRadius: 8,
+                  backgroundColor: "rgba(55,214,192,0.12)",
+                }}
+              >
+                <Ionicons name="swap-horizontal-outline" size={13} color="#37D6C0" />
+                <Text style={{ color: "#37D6C0", fontSize: 11.5, fontWeight: "700" }}>Transferir</Text>
+              </PressableScale>
+            ) : null}
           </View>
         </View>
 
@@ -700,6 +838,79 @@ export default function ChatScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* HU-7: recipient banner — offered ownership of this server */}
+        {isTransferRecipient ? (
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 12,
+              paddingHorizontal: 16,
+              paddingVertical: 12,
+              backgroundColor: "rgba(55,214,192,0.12)",
+              borderBottomWidth: 1,
+              borderBottomColor: "rgba(55,214,192,0.30)",
+            }}
+          >
+            <Ionicons name="swap-horizontal" size={18} color="#37D6C0" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: "#E6F3F3", fontSize: 12.5, fontWeight: "700" }}>
+                Te transfieren la propiedad de este servidor
+              </Text>
+              {bannerError ? (
+                <Text style={{ color: "#FF9E94", fontSize: 11.5, marginTop: 2 }}>{bannerError}</Text>
+              ) : null}
+            </View>
+            <PressableScale
+              onPress={handleAcceptTransfer}
+              disabled={transferActionBusy}
+              style={{
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 8,
+                backgroundColor: "#37D6C0",
+                opacity: transferActionBusy ? 0.7 : 1,
+              }}
+            >
+              <Text style={{ color: "#04211D", fontWeight: "700", fontSize: 11.5 }}>Aceptar</Text>
+            </PressableScale>
+            <PressableScale
+              onPress={handleRejectTransfer}
+              disabled={transferActionBusy}
+              hoverStyle={{ backgroundColor: "rgba(255,127,114,0.14)" }}
+              style={{
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.13)",
+                backgroundColor: "rgba(255,255,255,0.05)",
+                opacity: transferActionBusy ? 0.7 : 1,
+              }}
+            >
+              <Text style={{ color: "#8DA8AC", fontWeight: "700", fontSize: 11.5 }}>Rechazar</Text>
+            </PressableScale>
+          </View>
+        ) : isTransferSender ? (
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 12,
+              paddingHorizontal: 16,
+              paddingVertical: 12,
+              backgroundColor: "rgba(240,194,75,0.10)",
+              borderBottomWidth: 1,
+              borderBottomColor: "rgba(240,194,75,0.30)",
+            }}
+          >
+            <Ionicons name="hourglass-outline" size={18} color="#F0C24B" />
+            <Text style={{ flex: 1, color: "#E6F3F3", fontSize: 12.5, fontWeight: "600" }}>
+              Transferencia enviada. Queda pendiente de que la persona destinataria la acepte.
+            </Text>
+          </View>
+        ) : null}
 
         {/* Messages */}
         <FlatList
@@ -1192,6 +1403,99 @@ export default function ChatScreen() {
             )}
           </PressableScale>
         </View>
+      </ModalShell>
+
+      {/* Transfer ownership (HU-7) */}
+      <ModalShell
+        visible={transferOpen}
+        onClose={() => setTransferOpen(false)}
+        title="Transferir propiedad"
+        subtitle={`Elegí a quién pasarle la propiedad de ${activeServerName || "este servidor"}. Es una acción definitiva.`}
+      >
+        {transferError ? (
+          <View style={NOTICE_ERROR}>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{transferError}</Text>
+          </View>
+        ) : null}
+
+        <Text style={LABEL}>Nuevo propietario</Text>
+        {transferCandidates.length === 0 ? (
+          <View
+            style={{
+              borderRadius: 10,
+              paddingHorizontal: 12,
+              paddingVertical: 14,
+              marginBottom: 16,
+              backgroundColor: "rgba(255,255,255,0.04)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.10)",
+            }}
+          >
+            <Text style={{ color: "#8DA8AC", fontSize: 12.5, lineHeight: 18 }}>
+              No hay otros miembros a quien transferirle la propiedad. Invitá a alguien primero.
+            </Text>
+          </View>
+        ) : (
+          <View style={{ maxHeight: 200, marginBottom: 16 }}>
+            <ScrollView>
+              {transferCandidates.map((m) => {
+                const selected = transferSelectedId === m.id
+                return (
+                  <PressableScale
+                    key={m.id}
+                    onPress={() => setTransferSelectedId(m.id)}
+                    pressedScale={1}
+                    hoverStyle={selected ? undefined : { backgroundColor: "rgba(255,255,255,0.05)" }}
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 10,
+                      paddingHorizontal: 10,
+                      paddingVertical: 8,
+                      borderRadius: 10,
+                      marginBottom: 6,
+                      borderWidth: 1,
+                      borderColor: selected ? "#37D6C0" : "rgba(255,255,255,0.10)",
+                      backgroundColor: selected ? "rgba(55,214,192,0.14)" : "rgba(255,255,255,0.04)",
+                    }}
+                  >
+                    <Avatar initials={m.avatar} size={28} />
+                    <Text style={{ flex: 1, color: "#E6F3F3", fontSize: 13, fontWeight: "600" }} numberOfLines={1}>
+                      {m.name}
+                    </Text>
+                    {selected ? (
+                      <Ionicons name="checkmark-circle" size={18} color="#37D6C0" />
+                    ) : (
+                      <Ionicons name="ellipse-outline" size={18} color="#5E7E82" />
+                    )}
+                  </PressableScale>
+                )
+              })}
+            </ScrollView>
+          </View>
+        )}
+
+        <Text style={LABEL}>Escribí el nombre del servidor para confirmar</Text>
+        <TextInput
+          value={transferConfirmName}
+          onChangeText={setTransferConfirmName}
+          placeholder={activeServerName}
+          placeholderTextColor="#5E7E82"
+          autoCapitalize="none"
+          style={[FIELD, { marginBottom: 18 }]}
+        />
+
+        <PressableScale
+          onPress={handleTransfer}
+          disabled={!canTransfer || transferBusy}
+          style={[PRIMARY_BTN, { opacity: !canTransfer || transferBusy ? 0.5 : 1 }]}
+        >
+          {transferBusy ? (
+            <ActivityIndicator color="#04211D" />
+          ) : (
+            <Text style={PRIMARY_TXT}>Transferir</Text>
+          )}
+        </PressableScale>
       </ModalShell>
     </View>
   )

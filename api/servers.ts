@@ -271,6 +271,27 @@ export async function createInvite(
   return toInvite(res)
 }
 
+// HU-2 (CA4): list a server's active invites so the owner can review and revoke.
+export async function listInvites(serverId: string): Promise<Invite[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(400)
+    return []
+  }
+
+  const res = await api<BackendInviteOut[]>(`/servers/${serverId}/invites`)
+  return res.map(toInvite)
+}
+
+// HU-2 (CA4): revoke an invite. Backend returns 204 No Content on success.
+export async function revokeInvite(serverId: string, inviteId: string): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+
+  await api<void>(`/servers/${serverId}/invites/${inviteId}`, { method: "DELETE" })
+}
+
 // HU-3: join a server via an invite code. `joined` is false if already a member.
 export async function joinServer(
   code: string,

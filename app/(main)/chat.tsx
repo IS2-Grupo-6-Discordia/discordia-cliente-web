@@ -22,6 +22,8 @@ import {
   sendMessage,
   createServer,
   createInvite,
+  listInvites,
+  revokeInvite,
   joinServer,
   leaveServer,
   startOwnershipTransfer,
@@ -47,6 +49,39 @@ const UUID_RE =
 
 function isRealServerId(id: string): boolean {
   return UUID_RE.test(id)
+}
+
+// HU-2 (CA1): invite configuration options. Values are what the backend expects:
+// expiration in seconds (null = never), max uses as a count (null = unlimited).
+const INVITE_EXPIRY_OPTIONS: { label: string; value: number | null }[] = [
+  { label: "Nunca", value: null },
+  { label: "1 hora", value: 3600 },
+  { label: "1 día", value: 86400 },
+  { label: "7 días", value: 604800 },
+]
+const INVITE_MAX_USES_OPTIONS: { label: string; value: number | null }[] = [
+  { label: "Ilimitado", value: null },
+  { label: "1", value: 1 },
+  { label: "5", value: 5 },
+  { label: "10", value: 10 },
+]
+
+// Human-readable, relative expiration computed from the invite's `expiresAt`.
+function formatInviteExpiry(expiresAt: string | null | undefined): string {
+  if (!expiresAt) return "Sin expiración"
+  const ms = new Date(expiresAt).getTime() - Date.now()
+  if (ms <= 0) return "Expirada"
+  const minutes = Math.round(ms / 60000)
+  if (minutes < 60) return `Expira en ${minutes} min`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `Expira en ${hours} h`
+  const days = Math.round(hours / 24)
+  return `Expira en ${days} día${days === 1 ? "" : "s"}`
+}
+
+// "3/5 usos" when capped, "3 usos" when unlimited.
+function formatInviteUses(inv: Invite): string {
+  return inv.maxUses == null ? `${inv.uses} usos` : `${inv.uses}/${inv.maxUses} usos`
 }
 
 // Groups real server members (from getServerMembers) into the role sections the
@@ -173,6 +208,14 @@ export default function ChatScreen() {
   const [inviteBusy, setInviteBusy] = useState(false)
   const [inviteError, setInviteError] = useState("")
   const [copied, setCopied] = useState(false)
+  // CA1: invite configuration (expiration + usage limit) chosen before generating.
+  const [inviteExpires, setInviteExpires] = useState<number | null>(null)
+  const [inviteMaxUses, setInviteMaxUses] = useState<number | null>(null)
+  // CA4: the server's active invites, listed in the same modal for revocation.
+  const [activeInvites, setActiveInvites] = useState<Invite[]>([])
+  const [invitesLoading, setInvitesLoading] = useState(false)
+  const [invitesError, setInvitesError] = useState("")
+  const [revokingId, setRevokingId] = useState<string | null>(null)
 
   // Leave-server confirmation (HU-5)
   const [leaveOpen, setLeaveOpen] = useState(false)
@@ -441,8 +484,42 @@ export default function ChatScreen() {
     }
   }
 
-  const handleGenerateInvite = async () => {
+  // CA4: (re)load the active invites shown in the modal.
+  const refreshInvites = async (serverId: string) => {
+    setInvitesLoading(true)
+    setInvitesError("")
+    try {
+      const list = await listInvites(serverId)
+      setActiveInvites(list)
+    } catch (err) {
+      setInvitesError(friendlyError(err))
+      setActiveInvites([])
+    } finally {
+      setInvitesLoading(false)
+    }
+  }
+
+  // Opens the invite modal. No invite is generated on open anymore (CA1): the
+  // user first picks expiration/usage, then presses "Generar invitación". The
+  // active-invites list (CA4) loads immediately for real servers.
+  const handleGenerateInvite = () => {
     setInviteOpen(true)
+    setInvite(null)
+    setInviteError("")
+    setCopied(false)
+    setInviteExpires(null)
+    setInviteMaxUses(null)
+    setActiveInvites([])
+    setInvitesError("")
+    if (!isRealServerId(activeServer)) {
+      setInviteError(MOCK_SERVER_NOTICE)
+      return
+    }
+    refreshInvites(activeServer)
+  }
+
+  // CA1: generate an invite with the chosen expiration + usage limit.
+  const handleCreateInvite = async () => {
     setInvite(null)
     setInviteError("")
     setCopied(false)
@@ -452,8 +529,13 @@ export default function ChatScreen() {
     }
     setInviteBusy(true)
     try {
-      const result = await createInvite(activeServer)
+      const result = await createInvite(activeServer, {
+        expiresInSeconds: inviteExpires,
+        maxUses: inviteMaxUses,
+      })
       setInvite(result)
+      // Reflect the new invite in the active list right away.
+      refreshInvites(activeServer)
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
         setInviteError("No sos miembro de este servidor.")
@@ -464,6 +546,22 @@ export default function ChatScreen() {
       }
     } finally {
       setInviteBusy(false)
+    }
+  }
+
+  // CA4: revoke an invite, then drop it from the list.
+  const handleRevokeInvite = async (inviteId: string) => {
+    setInvitesError("")
+    setRevokingId(inviteId)
+    try {
+      await revokeInvite(activeServer, inviteId)
+      setActiveInvites((prev) => prev.filter((i) => i.id !== inviteId))
+      // If the just-generated invite was the one revoked, clear its display too.
+      setInvite((current) => (current && current.id === inviteId ? null : current))
+    } catch (err) {
+      setInvitesError(friendlyError(err))
+    } finally {
+      setRevokingId(null)
     }
   }
 
@@ -511,6 +609,40 @@ export default function ChatScreen() {
       setLeaveBusy(false)
     }
   }
+
+  // CA1: a row of selectable pills for a numeric-or-null option (expiration /
+  // usage limit), matching the app's teal-accent segmented style.
+  const renderInvitePills = (
+    options: { label: string; value: number | null }[],
+    current: number | null,
+    onSelect: (value: number | null) => void,
+  ) => (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+      {options.map((opt) => {
+        const selected = current === opt.value
+        return (
+          <PressableScale
+            key={opt.label}
+            onPress={() => onSelect(opt.value)}
+            pressedScale={0.96}
+            hoverStyle={selected ? undefined : { backgroundColor: "rgba(255,255,255,0.08)" }}
+            style={{
+              paddingHorizontal: 12,
+              paddingVertical: 7,
+              borderRadius: 9999,
+              borderWidth: 1,
+              borderColor: selected ? "#37D6C0" : "rgba(255,255,255,0.13)",
+              backgroundColor: selected ? "rgba(55,214,192,0.16)" : "rgba(255,255,255,0.04)",
+            }}
+          >
+            <Text style={{ color: selected ? "#37D6C0" : "#8DA8AC", fontSize: 12.5, fontWeight: "700" }}>
+              {opt.label}
+            </Text>
+          </PressableScale>
+        )
+      })}
+    </View>
+  )
 
   return (
     <View style={{ flex: 1, flexDirection: "row" }}>
@@ -1320,38 +1452,143 @@ export default function ChatScreen() {
         title="Invitar al servidor"
         subtitle={`Compartí este link para sumar gente a ${servers.find((s) => s.id === activeServer)?.name ?? "este servidor"}.`}
       >
-        {inviteBusy ? (
-          <View style={{ paddingVertical: 24, alignItems: "center" }}>
-            <ActivityIndicator color="#37D6C0" />
-            <Text style={{ color: "#8DA8AC", fontSize: 12.5, marginTop: 10 }}>Generando invitación…</Text>
-          </View>
-        ) : inviteError ? (
+        {!isRealServerId(activeServer) ? (
           <View style={NOTICE_ERROR}>
-            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{inviteError}</Text>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{inviteError || MOCK_SERVER_NOTICE}</Text>
           </View>
-        ) : invite ? (
-          <>
-            <Text style={LABEL}>Link de invitación</Text>
+        ) : (
+          <ScrollView style={{ maxHeight: 460 }} showsVerticalScrollIndicator={false}>
+            {/* CA1: configurable expiration + usage limit */}
+            <Text style={LABEL}>Expiración</Text>
+            {renderInvitePills(INVITE_EXPIRY_OPTIONS, inviteExpires, setInviteExpires)}
+            <Text style={LABEL}>Usos máximos</Text>
+            {renderInvitePills(INVITE_MAX_USES_OPTIONS, inviteMaxUses, setInviteMaxUses)}
+
+            <PressableScale
+              onPress={handleCreateInvite}
+              disabled={inviteBusy}
+              style={[PRIMARY_BTN, { marginBottom: 14, opacity: inviteBusy ? 0.7 : 1 }]}
+            >
+              {inviteBusy ? (
+                <ActivityIndicator color="#04211D" />
+              ) : (
+                <Text style={PRIMARY_TXT}>{invite ? "Generar otra" : "Generar invitación"}</Text>
+              )}
+            </PressableScale>
+
+            {inviteError ? (
+              <View style={NOTICE_ERROR}>
+                <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{inviteError}</Text>
+              </View>
+            ) : null}
+
+            {invite ? (
+              <>
+                <Text style={LABEL}>Link de invitación</Text>
+                <View
+                  style={{
+                    borderRadius: 10,
+                    paddingHorizontal: 12,
+                    paddingVertical: 11,
+                    backgroundColor: "rgba(255,255,255,0.06)",
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.10)",
+                    marginBottom: 8,
+                  }}
+                >
+                  <Text selectable numberOfLines={1} style={{ color: "#E6F3F3", fontSize: 13 }}>
+                    {invite.url}
+                  </Text>
+                </View>
+                <Text style={{ color: "#8DA8AC", fontSize: 11.5, marginBottom: 12 }}>
+                  {`${formatInviteExpiry(invite.expiresAt)} · ${
+                    invite.maxUses == null ? "usos ilimitados" : `hasta ${invite.maxUses} usos`
+                  }`}
+                </Text>
+                <PressableScale onPress={handleCopyInvite} style={PRIMARY_BTN}>
+                  <Text style={PRIMARY_TXT}>{copied ? "¡Copiado!" : "Copiar link"}</Text>
+                </PressableScale>
+              </>
+            ) : null}
+
+            {/* CA4: active invites with revoke */}
             <View
               style={{
-                borderRadius: 10,
-                paddingHorizontal: 12,
-                paddingVertical: 11,
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderWidth: 1,
-                borderColor: "rgba(255,255,255,0.10)",
-                marginBottom: 14,
+                marginTop: 18,
+                paddingTop: 16,
+                borderTopWidth: 1,
+                borderTopColor: "rgba(255,255,255,0.08)",
               }}
             >
-              <Text selectable numberOfLines={1} style={{ color: "#E6F3F3", fontSize: 13 }}>
-                {invite.url}
-              </Text>
+              <Text style={LABEL}>Invitaciones activas</Text>
+              {invitesLoading ? (
+                <View style={{ paddingVertical: 16, alignItems: "center" }}>
+                  <ActivityIndicator color="#37D6C0" />
+                </View>
+              ) : invitesError ? (
+                <View style={NOTICE_ERROR}>
+                  <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{invitesError}</Text>
+                </View>
+              ) : activeInvites.length === 0 ? (
+                <Text style={{ color: "#8DA8AC", fontSize: 12, lineHeight: 17 }}>
+                  Todavía no hay invitaciones activas.
+                </Text>
+              ) : (
+                activeInvites.map((inv) => (
+                  <View
+                    key={inv.id}
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 10,
+                      paddingHorizontal: 10,
+                      paddingVertical: 9,
+                      borderRadius: 10,
+                      marginBottom: 6,
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.10)",
+                      backgroundColor: "rgba(255,255,255,0.04)",
+                    }}
+                  >
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: "#E6F3F3", fontSize: 12.5, fontWeight: "700" }} numberOfLines={1}>
+                        {inv.code}
+                      </Text>
+                      <Text style={{ color: "#8DA8AC", fontSize: 10.5 }} numberOfLines={1}>
+                        {`${formatInviteUses(inv)} · ${formatInviteExpiry(inv.expiresAt)}`}
+                      </Text>
+                    </View>
+                    <PressableScale
+                      onPress={() => handleRevokeInvite(inv.id)}
+                      disabled={revokingId === inv.id}
+                      accessibilityLabel={`Revocar invitación ${inv.code}`}
+                      hoverStyle={{ backgroundColor: "rgba(255,127,114,0.14)" }}
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 5,
+                        paddingHorizontal: 10,
+                        paddingVertical: 6,
+                        borderRadius: 8,
+                        backgroundColor: "rgba(255,127,114,0.10)",
+                        opacity: revokingId === inv.id ? 0.6 : 1,
+                      }}
+                    >
+                      {revokingId === inv.id ? (
+                        <ActivityIndicator color="#FF9E94" size="small" />
+                      ) : (
+                        <>
+                          <Ionicons name="trash-outline" size={13} color="#FF9E94" />
+                          <Text style={{ color: "#FF9E94", fontSize: 11.5, fontWeight: "700" }}>Revocar</Text>
+                        </>
+                      )}
+                    </PressableScale>
+                  </View>
+                ))
+              )}
             </View>
-            <PressableScale onPress={handleCopyInvite} style={PRIMARY_BTN}>
-              <Text style={PRIMARY_TXT}>{copied ? "¡Copiado!" : "Copiar link"}</Text>
-            </PressableScale>
-          </>
-        ) : null}
+          </ScrollView>
+        )}
       </ModalShell>
 
       {/* Leave-server confirmation (HU-5) */}

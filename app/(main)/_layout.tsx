@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, Platform } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
 import Avatar from "@/components/Avatar"
+import SessionSplash from "@/components/SessionSplash"
 
 // Maps each tab to a filled/outline Ionicons pair so the bar reads as real
 // navigation (the default had no icons, which rendered as confusing ▼ glyphs).
@@ -14,8 +15,15 @@ function tabIcon(active: IoniconName, inactive: IoniconName) {
 }
 
 export default function MainLayout() {
-  const { user, logout, isLoggedIn } = useAuth()
+  const { user, logout, isLoggedIn, isLoading } = useAuth()
   const router = useRouter()
+
+  // Al recargar una ruta protegida (p. ej. /(main)/chat) este layout corre antes
+  // que index.tsx, así que también hay que esperar la rehidratación acá: si no,
+  // isLoggedIn es false por un frame y rebota al login aunque haya token.
+  if (isLoading) {
+    return <SessionSplash />
+  }
 
   // Session guard: as soon as the session is cleared (logout button, 401 auto-logout,
   // etc.) we bounce out of the protected group back to login.

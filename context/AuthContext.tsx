@@ -1,12 +1,13 @@
-import { createContext, useContext, useState, useCallback } from "react"
+import { createContext, useContext, useState, useCallback, useEffect } from "react"
 import type { ReactNode } from "react"
 import type { User } from "@/api/types"
-import { getToken } from "@/api/client"
+import { getToken, loadToken } from "@/api/client"
 import { logout as apiLogout } from "@/api/auth"
 
 interface AuthState {
   user: User | null
   isLoggedIn: boolean
+  isLoading: boolean
   setUser: (user: User) => void
   logout: () => void
 }
@@ -14,16 +15,35 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUserState] = useState<User | null>(() => {
-    // Si hay token guardado, restauramos la sesión con datos mínimos.
-    // Cuando el backend esté listo, acá se haría un GET /auth/me.
-    const token = getToken()
-    if (token) {
-      const saved = localStorage.getItem("discordia_user")
-      return saved ? JSON.parse(saved) : null
+  // Arrancamos sin sesión y "hidratando": getToken() es null hasta que loadToken()
+  // corra, así que NO decidimos la sesión en el initializer sync. La sesión real
+  // se restaura en el useEffect de abajo.
+  const [user, setUserState] = useState<User | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  // Rehidratación al montar: loadToken() trae el token de AsyncStorage a memoria
+  // y, si hay token, restauramos el user cacheado (discordia_user). Recién ahí
+  // bajamos isLoading para que el guard decida sin la race de redirigir por un
+  // frame antes de que el storage termine de leerse.
+  useEffect(() => {
+    let active = true
+    ;(async () => {
+      await loadToken()
+      if (!active) return
+      if (getToken()) {
+        try {
+          const saved = localStorage.getItem("discordia_user")
+          if (saved) setUserState(JSON.parse(saved))
+        } catch {
+          // Storage ilegible: seguimos sin user y el guard mandará al login.
+        }
+      }
+      setIsLoading(false)
+    })()
+    return () => {
+      active = false
     }
-    return null
-  })
+  }, [])
 
   const setUser = useCallback((u: User) => {
     setUserState(u)
@@ -37,7 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, isLoggedIn: !!user, setUser, logout }}>
+    <AuthContext.Provider value={{ user, isLoggedIn: !!user, isLoading, setUser, logout }}>
       {children}
     </AuthContext.Provider>
   )

@@ -657,6 +657,7 @@ export default function ChatScreen() {
         <FlatList
           data={messages}
           keyExtractor={(m) => m.id}
+          style={{ flex: 1 }}
           contentContainerStyle={
             messages.length === 0
               ? { flexGrow: 1, justifyContent: "center", alignItems: "center", padding: 24 }

@@ -183,6 +183,7 @@ export default function ChatScreen() {
   // Owner-initiated transfer modal.
   const [transferOpen, setTransferOpen] = useState(false)
   const [transferSelectedId, setTransferSelectedId] = useState("")
+  const [transferTargetName, setTransferTargetName] = useState("")
   const [transferConfirmName, setTransferConfirmName] = useState("")
   const [transferBusy, setTransferBusy] = useState(false)
   const [transferError, setTransferError] = useState("")
@@ -259,13 +260,12 @@ export default function ChatScreen() {
   const isOwner =
     !!activeServer && servers.find((s) => s.id === activeServer)?.ownerId === user?.id
 
-  // Members eligible to receive ownership: everyone in the roster except the
-  // current owner (the caller). Derived from the already-loaded role groups.
-  const transferCandidates = roles
-    .flatMap((r) => r.members)
-    .filter((m) => m.id !== user?.id)
-
   const activeServerName = servers.find((s) => s.id === activeServer)?.name ?? ""
+
+  // Whether the owner may offer ownership to a given member row: only the owner,
+  // only on real servers, and never the owner's own row.
+  const canOfferTransferTo = (memberId: string) =>
+    isOwner && isRealServerId(activeServer) && memberId !== user?.id
 
   // The recipient sees an actionable banner (accept/reject); the sender sees an
   // informational one while the transfer stays pending.
@@ -276,8 +276,11 @@ export default function ChatScreen() {
   const canTransfer =
     transferSelectedId !== "" && transferConfirmName.trim() === activeServerName
 
-  const openTransferModal = () => {
-    setTransferSelectedId("")
+  // Opens the transfer modal scoped to a specific member (chosen from the member
+  // panel row), so the confirmation dialog knows exactly who receives ownership.
+  const openTransferForMember = (memberId: string, memberName: string) => {
+    setTransferSelectedId(memberId)
+    setTransferTargetName(memberName)
     setTransferConfirmName("")
     setTransferError("")
     setTransferOpen(true)
@@ -703,25 +706,6 @@ export default function ChatScreen() {
               <Ionicons name="exit-outline" size={13} color="#8DA8AC" />
               <Text style={{ color: "#8DA8AC", fontSize: 11.5, fontWeight: "600" }}>Salir</Text>
             </PressableScale>
-            {isOwner && isRealServerId(activeServer) ? (
-              <PressableScale
-                onPress={openTransferModal}
-                accessibilityLabel="Transferir propiedad"
-                hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 5,
-                  paddingHorizontal: 10,
-                  paddingVertical: 5,
-                  borderRadius: 8,
-                  backgroundColor: "rgba(55,214,192,0.12)",
-                }}
-              >
-                <Ionicons name="swap-horizontal-outline" size={13} color="#37D6C0" />
-                <Text style={{ color: "#37D6C0", fontSize: 11.5, fontWeight: "700" }}>Transferir</Text>
-              </PressableScale>
-            ) : null}
           </View>
         </View>
 
@@ -1165,6 +1149,29 @@ export default function ChatScreen() {
                             {m.status === "online" ? "En línea" : m.status === "away" ? "Ausente" : "Desconectado/a"}
                           </Text>
                         </View>
+                        {/* HU-7: owner-only per-member action to hand over ownership.
+                            A separate touchable that stops the press from bubbling to
+                            the row's tap-to-open-profile navigation. */}
+                        {canOfferTransferTo(m.id) ? (
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation()
+                              openTransferForMember(m.id, m.name)
+                            }}
+                            accessibilityLabel={`Transferir propiedad a ${m.name}`}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            style={{
+                              width: 26,
+                              height: 26,
+                              borderRadius: 8,
+                              alignItems: "center",
+                              justifyContent: "center",
+                              backgroundColor: "rgba(55,214,192,0.10)",
+                            }}
+                          >
+                            <Ionicons name="swap-horizontal-outline" size={14} color="#37D6C0" />
+                          </TouchableOpacity>
+                        ) : null}
                       </TouchableOpacity>
                     )
                   })}
@@ -1410,7 +1417,7 @@ export default function ChatScreen() {
         visible={transferOpen}
         onClose={() => setTransferOpen(false)}
         title="Transferir propiedad"
-        subtitle={`Elegí a quién pasarle la propiedad de ${activeServerName || "este servidor"}. Es una acción definitiva.`}
+        subtitle={`Vas a pasarle la propiedad de ${activeServerName || "este servidor"}. Es una acción definitiva.`}
       >
         {transferError ? (
           <View style={NOTICE_ERROR}>
@@ -1419,61 +1426,21 @@ export default function ChatScreen() {
         ) : null}
 
         <Text style={LABEL}>Nuevo propietario</Text>
-        {transferCandidates.length === 0 ? (
-          <View
-            style={{
-              borderRadius: 10,
-              paddingHorizontal: 12,
-              paddingVertical: 14,
-              marginBottom: 16,
-              backgroundColor: "rgba(255,255,255,0.04)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.10)",
-            }}
-          >
-            <Text style={{ color: "#8DA8AC", fontSize: 12.5, lineHeight: 18 }}>
-              No hay otros miembros a quien transferirle la propiedad. Invitá a alguien primero.
-            </Text>
-          </View>
-        ) : (
-          <View style={{ maxHeight: 200, marginBottom: 16 }}>
-            <ScrollView>
-              {transferCandidates.map((m) => {
-                const selected = transferSelectedId === m.id
-                return (
-                  <PressableScale
-                    key={m.id}
-                    onPress={() => setTransferSelectedId(m.id)}
-                    pressedScale={1}
-                    hoverStyle={selected ? undefined : { backgroundColor: "rgba(255,255,255,0.05)" }}
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 10,
-                      paddingHorizontal: 10,
-                      paddingVertical: 8,
-                      borderRadius: 10,
-                      marginBottom: 6,
-                      borderWidth: 1,
-                      borderColor: selected ? "#37D6C0" : "rgba(255,255,255,0.10)",
-                      backgroundColor: selected ? "rgba(55,214,192,0.14)" : "rgba(255,255,255,0.04)",
-                    }}
-                  >
-                    <Avatar initials={m.avatar} size={28} />
-                    <Text style={{ flex: 1, color: "#E6F3F3", fontSize: 13, fontWeight: "600" }} numberOfLines={1}>
-                      {m.name}
-                    </Text>
-                    {selected ? (
-                      <Ionicons name="checkmark-circle" size={18} color="#37D6C0" />
-                    ) : (
-                      <Ionicons name="ellipse-outline" size={18} color="#5E7E82" />
-                    )}
-                  </PressableScale>
-                )
-              })}
-            </ScrollView>
-          </View>
-        )}
+        <View
+          style={{
+            borderRadius: 10,
+            paddingHorizontal: 12,
+            paddingVertical: 12,
+            marginBottom: 16,
+            backgroundColor: "rgba(55,214,192,0.10)",
+            borderWidth: 1,
+            borderColor: "rgba(55,214,192,0.30)",
+          }}
+        >
+          <Text style={{ color: "#E6F3F3", fontSize: 13.5, fontWeight: "700" }} numberOfLines={1}>
+            {transferTargetName}
+          </Text>
+        </View>
 
         <Text style={LABEL}>Escribí el nombre del servidor para confirmar</Text>
         <TextInput

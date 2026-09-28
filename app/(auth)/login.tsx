@@ -2,7 +2,6 @@ import { useState } from "react"
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
@@ -15,6 +14,7 @@ import { useAuth } from "@/context/AuthContext"
 import { login } from "@/api/auth"
 import { friendlyError } from "@/api/client"
 import PressableScale from "@/components/PressableScale"
+import AuthField from "@/components/AuthField"
 
 export default function LoginScreen() {
   const { setUser } = useAuth()
@@ -23,25 +23,7 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
-  const [focused, setFocused] = useState<"email" | "password" | null>(null)
   const [remember, setRemember] = useState(true)
-
-  // Field styling with a teal focus ring, so inputs react to interaction.
-  const fieldStyle = (name: "email" | "password") => ({
-    width: "100%" as const,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    color: "#E6F3F3",
-    fontSize: 14,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: error
-      ? "#FF7F72"
-      : focused === name
-        ? "#37D6C0"
-        : "rgba(255,255,255,0.10)",
-  })
 
   const handleLogin = async () => {
     setLoading(true)
@@ -125,34 +107,26 @@ export default function LoginScreen() {
           ) : null}
 
           {/* Email */}
-          <Text style={{ color: "#8DA8AC", fontSize: 10, fontWeight: "600", textTransform: "uppercase", letterSpacing: 1.1, marginBottom: 4 }}>
-            Correo electrónico
-          </Text>
-          <TextInput
+          <AuthField
+            label="Correo electrónico"
             value={email}
             onChangeText={setEmail}
-            onFocus={() => setFocused("email")}
-            onBlur={() => setFocused(null)}
             placeholder="vos@ejemplo.com"
-            placeholderTextColor="#5E7E82"
             keyboardType="email-address"
             autoCapitalize="none"
-            style={{ ...fieldStyle("email"), marginBottom: 14 }}
+            error={!!error}
+            containerStyle={{ marginBottom: 14 }}
           />
 
           {/* Password */}
-          <Text style={{ color: "#8DA8AC", fontSize: 10, fontWeight: "600", textTransform: "uppercase", letterSpacing: 1.1, marginBottom: 4 }}>
-            Contraseña
-          </Text>
-          <TextInput
+          <AuthField
+            label="Contraseña"
             value={password}
             onChangeText={setPassword}
-            onFocus={() => setFocused("password")}
-            onBlur={() => setFocused(null)}
             placeholder="••••••••"
-            placeholderTextColor="#5E7E82"
             secureTextEntry
-            style={{ ...fieldStyle("password"), marginBottom: 12 }}
+            error={!!error}
+            containerStyle={{ marginBottom: 12 }}
           />
 
           {/* Remember + forgot password */}

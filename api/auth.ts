@@ -1,4 +1,4 @@
-import { api, ApiError, getRefreshToken, setRefreshToken, setToken } from "./client"
+import { api, apiUpload, ApiError, getRefreshToken, setRefreshToken, setToken } from "./client"
 import type { AuthResponse, User } from "./types"
 
 const USE_MOCK = !process.env.EXPO_PUBLIC_API_URL
@@ -19,6 +19,7 @@ interface BackendUser {
   name: string
   email: string
   bio?: string | null
+  avatar_url?: string | null
   created_at?: string
 }
 
@@ -39,6 +40,7 @@ function toUser(backendUser: BackendUser): User {
     email: backendUser.email,
     bio: backendUser.bio ?? null,
     avatar: initials(backendUser.name),
+    avatarUrl: backendUser.avatar_url ?? null,
     createdAt: backendUser.created_at,
   }
 }
@@ -161,7 +163,7 @@ export async function logout() {
 
 export async function updateProfile(updates: {
   name?: string
-  bio?: string
+  bio?: string | null
 }): Promise<User> {
   if (USE_MOCK) {
     await mockDelay(600)
@@ -172,5 +174,51 @@ export async function updateProfile(updates: {
     method: "PATCH",
     body: JSON.stringify(updates),
   })
+  return toUser(res)
+}
+
+export async function getMe(): Promise<User> {
+  if (USE_MOCK) {
+    await mockDelay(500)
+    return {
+      id: MOCK_USER.id,
+      name: MOCK_USER.name,
+      email: MOCK_USER.email,
+      bio: null,
+      avatar: MOCK_USER.avatar,
+      avatarUrl: null,
+    }
+  }
+
+  const res = await api<BackendUser>("/auth/users/me")
+  return toUser(res)
+}
+
+// Accepts a native file descriptor ({uri,name,type}) or, on web, a real Blob.
+// On web, appending a {uri,name,type} object to FormData does NOT upload the
+// binary, so the screen converts the picked asset to a Blob before calling.
+export async function updateAvatar(
+  file: Blob | { uri: string; name: string; type: string },
+): Promise<User> {
+  if (USE_MOCK) {
+    await mockDelay(800)
+    const uri = file instanceof Blob ? undefined : file.uri
+    return {
+      id: MOCK_USER.id,
+      name: MOCK_USER.name,
+      email: MOCK_USER.email,
+      bio: null,
+      avatar: MOCK_USER.avatar,
+      avatarUrl: uri ?? null,
+    }
+  }
+
+  const fd = new FormData()
+  if (file instanceof Blob) {
+    fd.append("file", file, "avatar")
+  } else {
+    fd.append("file", file as any)
+  }
+  const res = await apiUpload<BackendUser>("/auth/users/me/avatar", fd)
   return toUser(res)
 }

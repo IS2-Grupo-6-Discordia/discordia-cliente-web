@@ -89,3 +89,45 @@ export async function api<T>(
   const text = await res.text()
   return (text ? JSON.parse(text) : undefined) as T
 }
+
+// Multipart upload helper. Unlike `api()`, this does NOT set Content-Type so
+// that fetch can add the multipart boundary itself; it only attaches the
+// Authorization header when a token is present.
+export async function apiUpload<T>(
+  path: string,
+  formData: FormData,
+): Promise<T> {
+  const headers: Record<string, string> = {}
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    body: formData,
+    headers,
+  })
+
+  if (res.status === 401) {
+    await setToken(null)
+    await setRefreshToken(null)
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    let detail: unknown = text
+    try {
+      detail = text ? JSON.parse(text).detail ?? text : "Error desconocido"
+    } catch {
+      detail = text || "Error desconocido"
+    }
+    throw new ApiError(res.status, detail, extractDetailMessage(detail, "Error desconocido"))
+  }
+
+  if (res.status === 204) {
+    return undefined as T
+  }
+  const text = await res.text()
+  return (text ? JSON.parse(text) : undefined) as T
+}

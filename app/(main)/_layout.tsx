@@ -1,9 +1,17 @@
-import { Tabs } from "expo-router"
+import { Tabs, useRouter, Redirect } from "expo-router"
 import { View, Text, TouchableOpacity } from "react-native"
 import { useAuth } from "@/context/AuthContext"
+import Avatar from "@/components/Avatar"
 
 export default function MainLayout() {
-  const { user, logout } = useAuth()
+  const { user, logout, isLoggedIn } = useAuth()
+  const router = useRouter()
+
+  // Session guard: as soon as the session is cleared (logout button, 401 auto-logout,
+  // etc.) we bounce out of the protected group back to login.
+  if (!isLoggedIn) {
+    return <Redirect href="/(auth)/login" />
+  }
 
   return (
     <Tabs
@@ -24,7 +32,13 @@ export default function MainLayout() {
         ),
         headerRight: () => (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginRight: 12 }}>
-            <Text style={{ color: "#8DA8AC", fontSize: 12 }}>{user?.name}</Text>
+            <TouchableOpacity
+              onPress={() => router.push("/(main)/profile")}
+              style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+            >
+              <Avatar initials={user?.avatar ?? "?"} size={22} uri={user?.avatarUrl} />
+              <Text style={{ color: "#8DA8AC", fontSize: 12 }}>{user?.name}</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={logout}
               style={{ borderWidth: 1, borderColor: "rgba(255,255,255,0.13)", borderRadius: 9999, paddingHorizontal: 8, paddingVertical: 2 }}
@@ -62,6 +76,10 @@ export default function MainLayout() {
       <Tabs.Screen
         name="backoffice"
         options={{ title: "Backoffice", tabBarLabel: "Backoffice" }}
+      />
+      <Tabs.Screen
+        name="profile"
+        options={{ href: null, title: "Perfil" }}
       />
     </Tabs>
   )

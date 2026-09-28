@@ -1,11 +1,21 @@
-import { View, Text } from "react-native"
+import { View, Text, Image } from "react-native"
 
 interface AvatarProps {
   initials: string
   size?: number
+  uri?: string | null
 }
 
-export default function Avatar({ initials, size = 28 }: AvatarProps) {
+export default function Avatar({ initials, size = 28, uri }: AvatarProps) {
+  if (uri) {
+    return (
+      <Image
+        source={{ uri }}
+        style={{ width: size, height: size, borderRadius: 9999 }}
+      />
+    )
+  }
+
   return (
     <View
       style={{

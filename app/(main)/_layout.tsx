@@ -2,7 +2,7 @@ import { Tabs, useRouter, Redirect } from "expo-router"
 import { View, Text, TouchableOpacity, Platform } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
-import Avatar from "@/components/Avatar"
+import UserMenu from "@/components/UserMenu"
 import SessionSplash from "@/components/SessionSplash"
 
 // Maps each tab to a filled/outline Ionicons pair so the bar reads as real
@@ -15,7 +15,7 @@ function tabIcon(active: IoniconName, inactive: IoniconName) {
 }
 
 export default function MainLayout() {
-  const { user, logout, isLoggedIn, isLoading } = useAuth()
+  const { isLoggedIn, isLoading } = useAuth()
   const router = useRouter()
 
   // Al recargar una ruta protegida (p. ej. /(main)/chat) este layout corre antes
@@ -65,31 +65,8 @@ export default function MainLayout() {
           </TouchableOpacity>
         ),
         headerRight: () => (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginRight: 12 }}>
-            <TouchableOpacity
-              onPress={() => router.push("/(main)/profile")}
-              accessibilityLabel="Ver mi perfil"
-              style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
-            >
-              <Avatar initials={user?.avatar ?? "?"} size={30} uri={user?.avatarUrl} />
-              <Text style={{ color: "#E6F3F3", fontSize: 14, fontWeight: "700" }}>{user?.name}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={logout}
-              accessibilityLabel="Cerrar sesión"
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 5,
-                borderRadius: 8,
-                paddingHorizontal: 10,
-                paddingVertical: 5,
-                backgroundColor: "rgba(255,255,255,0.06)",
-              }}
-            >
-              <Ionicons name="log-out-outline" size={14} color="#8DA8AC" />
-              <Text style={{ color: "#8DA8AC", fontSize: 11.5, fontWeight: "600" }}>Salir</Text>
-            </TouchableOpacity>
+          <View style={{ marginRight: 12 }}>
+            <UserMenu />
           </View>
         ),
         tabBarStyle: {

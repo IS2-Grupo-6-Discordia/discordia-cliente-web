@@ -6,14 +6,17 @@ import {
   ScrollView,
   Platform,
   ActivityIndicator,
+  Image,
 } from "react-native"
 import { useLocalSearchParams, useRouter } from "expo-router"
 import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
 import { getUserById } from "@/api/auth"
+import { getCommonServers } from "@/api/servers"
 import { ApiError, friendlyError } from "@/api/client"
 import Avatar from "@/components/Avatar"
-import type { PublicUser } from "@/api/types"
+import { PresenceDot, STATUS_LABELS } from "@/components/StatusDot"
+import type { PublicUser, Server } from "@/api/types"
 
 const CARD_BG = "#0B1822"
 
@@ -55,6 +58,7 @@ export default function PublicProfileScreen() {
   const { user } = useAuth()
 
   const [profile, setProfile] = useState<PublicUser | null>(null)
+  const [commonServers, setCommonServers] = useState<Server[]>([])
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [loadError, setLoadError] = useState("")
@@ -77,9 +81,13 @@ export default function PublicProfileScreen() {
     setLoadError("")
     ;(async () => {
       try {
-        const data = await getUserById(String(id))
+        const [data, servers] = await Promise.all([
+          getUserById(String(id)),
+          getCommonServers(String(id)).catch(() => []),
+        ])
         if (!active) return
         setProfile(data)
+        setCommonServers(servers)
       } catch (err) {
         if (!active) return
         if (err instanceof ApiError && err.status === 404) {
@@ -170,10 +178,10 @@ export default function PublicProfileScreen() {
                   <Ionicons name="person-outline" size={26} color="#5E7E82" />
                 </View>
                 <Text style={{ color: "#E6F3F3", fontSize: 15, fontWeight: "700", textAlign: "center" }}>
-                  Usuario no disponible
+                  Perfil no disponible
                 </Text>
                 <Text style={{ color: "#8DA8AC", fontSize: 12.5, textAlign: "center", lineHeight: 18, maxWidth: 300 }}>
-                  {loadError || "No encontramos este usuario. Puede que ya no exista."}
+                  {loadError || "Este perfil no está disponible."}
                 </Text>
               </View>
             ) : (
@@ -190,6 +198,10 @@ export default function PublicProfileScreen() {
                   <Text style={{ color: "#F2FAFA", fontSize: 21, fontWeight: "800", letterSpacing: -0.3 }}>
                     {profile.name}
                   </Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 }}>
+                    <PresenceDot status={profile.status} size={10} ringColor={CARD_BG} />
+                    <Text style={{ color: "#8DA8AC", fontSize: 13 }}>{STATUS_LABELS[profile.status]}</Text>
+                  </View>
                 </View>
 
                 <View style={{ height: 1, backgroundColor: "rgba(255,255,255,0.08)", marginBottom: 18 }} />
@@ -199,6 +211,61 @@ export default function PublicProfileScreen() {
                   value={profile.bio ? profile.bio : "Sin descripción"}
                   muted={!profile.bio}
                 />
+
+                <View>
+                  <Text style={labelStyle}>
+                    Servidores en común{commonServers.length > 0 ? ` — ${commonServers.length}` : ""}
+                  </Text>
+                  {commonServers.length === 0 ? (
+                    <Text style={{ color: "#8DA8AC", fontSize: 14, lineHeight: 20 }}>
+                      No tienen servidores en común
+                    </Text>
+                  ) : (
+                    <View style={{ gap: 8, marginTop: 4 }}>
+                      {commonServers.map((server) => (
+                        <TouchableOpacity
+                          key={server.id}
+                          onPress={() =>
+                            router.push({ pathname: "/(main)/chat", params: { serverId: server.id } })
+                          }
+                          style={{
+                            flexDirection: "row",
+                            alignItems: "center",
+                            gap: 10,
+                            padding: 8,
+                            borderRadius: 10,
+                            backgroundColor: "rgba(255,255,255,0.04)",
+                          }}
+                        >
+                          {server.iconUrl ? (
+                            <Image
+                              source={{ uri: server.iconUrl }}
+                              style={{ width: 32, height: 32, borderRadius: 10 }}
+                            />
+                          ) : (
+                            <View
+                              style={{
+                                width: 32,
+                                height: 32,
+                                borderRadius: 10,
+                                alignItems: "center",
+                                justifyContent: "center",
+                                backgroundColor: server.color,
+                              }}
+                            >
+                              <Text style={{ color: "#04211D", fontSize: 12, fontWeight: "800" }}>
+                                {server.abbr}
+                              </Text>
+                            </View>
+                          )}
+                          <Text style={{ color: "#E6F3F3", fontSize: 14, fontWeight: "600", flex: 1 }} numberOfLines={1}>
+                            {server.name}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </View>
               </>
             )}
           </View>

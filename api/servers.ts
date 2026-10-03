@@ -360,6 +360,16 @@ interface BackendServerMember {
 // avatars are hydrated from the auth service in a single batch call and merged.
 // A member whose public profile can't be resolved still appears, with a neutral
 // fallback name, so the roster is never silently short.
+export async function getCommonServers(userId: string): Promise<Server[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(400)
+    return []
+  }
+
+  const res = await api<BackendServerSummary[]>(`/servers/common/${userId}`)
+  return res.map(toServer)
+}
+
 export async function getServerMembers(serverId: string): Promise<ServerMember[]> {
   if (WRITE_USE_MOCK) {
     await mockDelay(500)
@@ -379,6 +389,7 @@ export async function getServerMembers(serverId: string): Promise<ServerMember[]
       name,
       avatar: abbrFor(name),
       avatarUrl: profile?.avatarUrl ?? null,
+      status: profile?.status ?? "offline",
       joinedAt: row.joined_at,
     }
   })

@@ -1,3 +1,7 @@
+export type PresenceStatus = "online" | "away" | "dnd" | "offline"
+
+export type UserStatus = "online" | "away" | "dnd" | "invisible"
+
 export interface User {
   id: string
   name: string
@@ -5,6 +9,7 @@ export interface User {
   avatar: string
   avatarUrl?: string | null
   bio?: string | null
+  status?: UserStatus
   createdAt?: string
 }
 
@@ -16,6 +21,7 @@ export interface PublicUser {
   name: string
   bio?: string | null
   avatarUrl?: string | null
+  status: PresenceStatus
 }
 
 export interface AuthResponse {
@@ -43,6 +49,7 @@ export interface ServerMember {
   name: string
   avatar: string
   avatarUrl: string | null
+  status: PresenceStatus
   joinedAt: string
 }
 
@@ -89,7 +96,7 @@ export interface Member {
   name: string
   avatar: string
   color: string
-  status: "online" | "away" | "offline"
+  status: PresenceStatus
 }
 
 export interface RoleGroup {

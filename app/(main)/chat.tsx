@@ -13,7 +13,7 @@ import {
 import type { ViewStyle, TextStyle } from "react-native"
 import * as ImagePicker from "expo-image-picker"
 import * as Clipboard from "expo-clipboard"
-import { useRouter } from "expo-router"
+import { useLocalSearchParams, useRouter } from "expo-router"
 import {
   getServers,
   getCategories,
@@ -36,7 +36,7 @@ import { ApiError, friendlyError } from "@/api/client"
 import { useAuth } from "@/context/AuthContext"
 import { Ionicons } from "@expo/vector-icons"
 import Avatar from "@/components/Avatar"
-import StatusDot from "@/components/StatusDot"
+import StatusDot, { STATUS_LABELS } from "@/components/StatusDot"
 import ModalShell from "@/components/ModalShell"
 import PressableScale from "@/components/PressableScale"
 
@@ -85,15 +85,14 @@ function formatInviteUses(inv: Invite): string {
 }
 
 // Groups real server members (from getServerMembers) into the role sections the
-// member panel renders. The backend only knows "owner" / "member" and tracks no
-// presence, so everyone is shown as online for now (there is no presence service).
+// member panel renders. The backend only knows "owner" / "member".
 function membersToRoleGroups(members: ServerMember[]): RoleGroup[] {
   const toMember = (m: ServerMember, color: string): Member => ({
     id: m.userId,
     name: m.name,
     avatar: m.avatar,
     color,
-    status: "online",
+    status: m.status,
   })
   const owners = members.filter((m) => m.role === "owner")
   const rest = members.filter((m) => m.role !== "owner")
@@ -160,6 +159,7 @@ const NOTICE_OK: ViewStyle = {
 
 export default function ChatScreen() {
   const router = useRouter()
+  const { serverId: requestedServerId } = useLocalSearchParams<{ serverId?: string }>()
   const { user } = useAuth()
   // No server is selected until the real list loads. Never default to a mock id,
   // or the app boots into a phantom server (and its mock channels/messages) even
@@ -244,6 +244,12 @@ export default function ChatScreen() {
       setActiveServer((current) => current || list[0]?.id || "")
     })
   }, [])
+
+  useEffect(() => {
+    if (requestedServerId && servers.some((s) => s.id === requestedServerId)) {
+      setActiveServer(requestedServerId)
+    }
+  }, [requestedServerId, servers])
 
   useEffect(() => {
     if (!activeServer) {
@@ -1278,7 +1284,7 @@ export default function ChatScreen() {
                             {m.name}
                           </Text>
                           <Text style={{ color: "#8DA8AC", fontSize: 10 }} numberOfLines={1}>
-                            {m.status === "online" ? "En línea" : m.status === "away" ? "Ausente" : "Desconectado/a"}
+                            {STATUS_LABELS[m.status]}
                           </Text>
                         </View>
                         {/* HU-7: owner-only per-member action to hand over ownership.

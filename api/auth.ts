@@ -1,5 +1,5 @@
 import { api, apiUpload, ApiError, getRefreshToken, setRefreshToken, setToken } from "./client"
-import type { AuthResponse, PublicUser, User } from "./types"
+import type { AuthResponse, PresenceStatus, PublicUser, User, UserStatus } from "./types"
 
 const USE_MOCK = !process.env.EXPO_PUBLIC_API_URL
 
@@ -20,6 +20,7 @@ interface BackendUser {
   email: string
   bio?: string | null
   avatar_url?: string | null
+  status?: UserStatus
   created_at?: string
 }
 
@@ -41,6 +42,7 @@ function toUser(backendUser: BackendUser): User {
     bio: backendUser.bio ?? null,
     avatar: initials(backendUser.name),
     avatarUrl: backendUser.avatar_url ?? null,
+    status: backendUser.status ?? "online",
     createdAt: backendUser.created_at,
   }
 }
@@ -52,6 +54,7 @@ interface BackendPublicUser {
   name: string
   bio?: string | null
   avatar_url?: string | null
+  status?: PresenceStatus
 }
 
 function toPublicUser(backendUser: BackendPublicUser): PublicUser {
@@ -60,6 +63,7 @@ function toPublicUser(backendUser: BackendPublicUser): PublicUser {
     name: backendUser.name,
     bio: backendUser.bio ?? null,
     avatarUrl: backendUser.avatar_url ?? null,
+    status: backendUser.status ?? "offline",
   }
 }
 
@@ -184,6 +188,7 @@ export async function logout() {
 export async function updateProfile(updates: {
   name?: string
   bio?: string | null
+  status?: UserStatus
 }): Promise<User> {
   if (USE_MOCK) {
     await mockDelay(600)
@@ -223,7 +228,7 @@ export async function getUserById(id: string): Promise<PublicUser> {
     // There's no mock store of other users' public profiles, so any lookup
     // resolves as "not found" -> the same 404 the real backend returns for a
     // missing id. The screen renders its empty state instead of fake data.
-    const detail = "No encontramos este usuario."
+    const detail = "Este perfil no está disponible."
     throw new ApiError(404, detail, detail)
   }
 

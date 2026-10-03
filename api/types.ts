@@ -136,6 +136,15 @@ export interface AdminUser {
   date: string
 }
 
+export interface AdminServer {
+  id: string
+  name: string
+  iconUrl: string | null
+  ownerId: string
+  memberCount: number
+  createdAt: string
+}
+
 export interface KPI {
   label: string
   value: string

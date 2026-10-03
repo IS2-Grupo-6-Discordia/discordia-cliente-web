@@ -17,18 +17,10 @@ import PressableScale from "@/components/PressableScale"
 import { getMe, updateProfile, updateAvatar } from "@/api/auth"
 import { ApiError, friendlyError } from "@/api/client"
 import Avatar from "@/components/Avatar"
-import { PresenceDot, STATUS_LABELS } from "@/components/StatusDot"
-import type { User, UserStatus } from "@/api/types"
+import type { User } from "@/api/types"
 
 const NAME_MAX = 80
 const BIO_MAX = 300
-
-const STATUS_OPTIONS: { value: UserStatus; label: string }[] = [
-  { value: "online", label: STATUS_LABELS.online },
-  { value: "away", label: STATUS_LABELS.away },
-  { value: "dnd", label: STATUS_LABELS.dnd },
-  { value: "invisible", label: "Invisible" },
-]
 
 function ErrorBox({ text }: { text: string }) {
   return (
@@ -117,9 +109,6 @@ export default function ProfileScreen() {
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState("")
 
-  const [statusSaving, setStatusSaving] = useState(false)
-  const [statusError, setStatusError] = useState("")
-
   const [avatarLoading, setAvatarLoading] = useState(false)
   const [avatarError, setAvatarError] = useState("")
 
@@ -190,21 +179,6 @@ export default function ProfileScreen() {
       setFormError(friendlyError(err))
     } finally {
       setSaving(false)
-    }
-  }
-
-  const handleChangeStatus = async (next: UserStatus) => {
-    if (!profile || statusSaving || next === (profile.status ?? "online")) return
-    setStatusSaving(true)
-    setStatusError("")
-    try {
-      const updated = await updateProfile({ status: next })
-      setProfile(updated)
-      setUser(updated)
-    } catch (err) {
-      setStatusError(friendlyError(err))
-    } finally {
-      setStatusSaving(false)
     }
   }
 
@@ -456,47 +430,6 @@ export default function ProfileScreen() {
                       muted={!display.bio}
                     />
                     {memberSince ? <InfoRow label="Miembro desde" value={memberSince} muted /> : null}
-
-                    <View style={{ marginBottom: 14 }}>
-                      <Text style={labelStyle}>Estado</Text>
-                      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 2 }}>
-                        {STATUS_OPTIONS.map((option) => {
-                          const selected = (display.status ?? "online") === option.value
-                          return (
-                            <TouchableOpacity
-                              key={option.value}
-                              onPress={() => handleChangeStatus(option.value)}
-                              disabled={statusSaving}
-                              accessibilityState={{ selected }}
-                              style={{
-                                flexDirection: "row",
-                                alignItems: "center",
-                                gap: 6,
-                                paddingVertical: 6,
-                                paddingHorizontal: 10,
-                                borderRadius: 9999,
-                                borderWidth: 1,
-                                borderColor: selected ? "#37D6C0" : "rgba(255,255,255,0.12)",
-                                backgroundColor: selected ? "rgba(55,214,192,0.12)" : "transparent",
-                                opacity: statusSaving && !selected ? 0.6 : 1,
-                              }}
-                            >
-                              <PresenceDot
-                                status={option.value}
-                                size={9}
-                                ringColor={selected ? "#102F35" : "#0B1822"}
-                              />
-                              <Text style={{ color: selected ? "#E6F3F3" : "#8DA8AC", fontSize: 12.5, fontWeight: "600" }}>
-                                {option.label}
-                              </Text>
-                            </TouchableOpacity>
-                          )
-                        })}
-                      </View>
-                      {statusError ? (
-                        <Text style={{ color: "#F07A7A", fontSize: 12, marginTop: 6 }}>{statusError}</Text>
-                      ) : null}
-                    </View>
 
                     <PressableScale
                       onPress={startEditing}

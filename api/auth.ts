@@ -105,6 +105,16 @@ export async function login(
   return { token: res.access_token, user: toUser(res.user) }
 }
 
+export async function loginWithGoogle(idToken: string): Promise<AuthResponse> {
+  const res = await api<LoginApiResponse>("/auth/oauth/google", {
+    method: "POST",
+    body: JSON.stringify({ id_token: idToken }),
+  })
+  await setToken(res.access_token)
+  await setRefreshToken(res.refresh_token)
+  return { token: res.access_token, user: toUser(res.user) }
+}
+
 export async function register(
   name: string,
   email: string,

@@ -11,10 +11,14 @@ import {
 import { useRouter } from "expo-router"
 import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
-import { login } from "@/api/auth"
-import { friendlyError } from "@/api/client"
+import { login, loginWithGoogle } from "@/api/auth"
+import { ApiError, friendlyError } from "@/api/client"
 import PressableScale from "@/components/PressableScale"
 import AuthField from "@/components/AuthField"
+import GoogleSignInButton, { isGoogleSignInAvailable } from "@/components/GoogleSignInButton"
+
+const GOOGLE_UNAVAILABLE =
+  "No pudimos conectarnos con Google. Ingresá con tu email y contraseña o probá de nuevo en un rato."
 
 export default function LoginScreen() {
   const { setUser } = useAuth()
@@ -24,6 +28,34 @@ export default function LoginScreen() {
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
   const [remember, setRemember] = useState(true)
+  const [googleLoading, setGoogleLoading] = useState(false)
+  const [googleNotice, setGoogleNotice] = useState("")
+  const [googleAttempt, setGoogleAttempt] = useState(0)
+
+  const handleGoogleCredential = async (idToken: string) => {
+    setGoogleLoading(true)
+    setGoogleNotice("")
+    setError("")
+    try {
+      const res = await loginWithGoogle(idToken)
+      setUser(res.user)
+      router.replace("/(main)/chat")
+    } catch (err) {
+      const unavailable =
+        (err instanceof ApiError && err.status >= 500) ||
+        err instanceof TypeError ||
+        (err instanceof Error && err.name === "AbortError")
+      if (unavailable) setGoogleNotice(GOOGLE_UNAVAILABLE)
+      else setError(friendlyError(err))
+    } finally {
+      setGoogleLoading(false)
+    }
+  }
+
+  const retryGoogle = () => {
+    setGoogleNotice("")
+    setGoogleAttempt((n) => n + 1)
+  }
 
   const handleLogin = async () => {
     setLoading(true)
@@ -183,34 +215,46 @@ export default function LoginScreen() {
             )}
           </PressableScale>
 
-          {/* Divider */}
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginVertical: 12 }}>
-            <View style={{ flex: 1, height: 1, backgroundColor: "rgba(255,255,255,0.13)" }} />
-            <Text style={{ color: "#8DA8AC", fontSize: 10, textTransform: "uppercase", letterSpacing: 1.6 }}>o</Text>
-            <View style={{ flex: 1, height: 1, backgroundColor: "rgba(255,255,255,0.13)" }} />
-          </View>
+          {isGoogleSignInAvailable() ? (
+            <>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginVertical: 12 }}>
+                <View style={{ flex: 1, height: 1, backgroundColor: "rgba(255,255,255,0.13)" }} />
+                <Text style={{ color: "#8DA8AC", fontSize: 12 }}>o</Text>
+                <View style={{ flex: 1, height: 1, backgroundColor: "rgba(255,255,255,0.13)" }} />
+              </View>
 
-          {/* Google button */}
-          <PressableScale
-            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.08)" }}
-            style={{
-              width: "100%",
-              borderRadius: 10,
-              paddingVertical: 13,
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.10)",
-              backgroundColor: "rgba(255,255,255,0.04)",
-            }}
-          >
-            <View style={{ width: 18, height: 18, borderRadius: 9999, backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center" }}>
-              <Text style={{ color: "#1A1A1A", fontSize: 11, fontWeight: "900" }}>G</Text>
-            </View>
-            <Text style={{ color: "#E6F3F3", fontWeight: "600", fontSize: 14 }}>Continuar con Google</Text>
-          </PressableScale>
+              <View>
+                {googleNotice ? (
+                  <View
+                    accessibilityRole="alert"
+                    style={{
+                      padding: 12,
+                      borderRadius: 10,
+                      gap: 8,
+                      backgroundColor: "rgba(240,194,75,0.10)",
+                      borderWidth: 1,
+                      borderColor: "rgba(240,194,75,0.45)",
+                    }}
+                  >
+                    <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+                      <Ionicons name="cloud-offline-outline" size={16} color="#F0C24B" style={{ marginTop: 1 }} />
+                      <Text style={{ color: "#F3DFA6", fontSize: 12.5, lineHeight: 18, flex: 1 }}>{googleNotice}</Text>
+                    </View>
+                    <TouchableOpacity onPress={retryGoogle} style={{ alignSelf: "flex-end" }}>
+                      <Text style={{ color: "#F0C24B", fontSize: 12.5, fontWeight: "700" }}>Reintentar con Google</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <GoogleSignInButton
+                    key={googleAttempt}
+                    loading={googleLoading}
+                    onCredential={handleGoogleCredential}
+                    onUnavailable={() => setGoogleNotice(GOOGLE_UNAVAILABLE)}
+                  />
+                )}
+              </View>
+            </>
+          ) : null}
 
           {/* Register link */}
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 16, gap: 4 }}>

@@ -28,6 +28,7 @@ import {
   leaveServer,
   deleteChannel,
   updateChannel,
+  reorderChannels,
   startOwnershipTransfer,
   getPendingTransfer,
   acceptOwnershipTransfer,
@@ -680,6 +681,48 @@ export default function ChatScreen() {
     }
   }
 
+  // ---- Channel reorder ------------------------------------------------------
+
+  const handleMoveChannel = async (channelId: string, direction: "up" | "down") => {
+    if (!isRealServerId(activeServer)) return
+    const allChannels = categories.flatMap((c) => c.channels)
+    const idx = allChannels.findIndex((c) => c.id === channelId)
+    if (idx < 0) return
+    const targetIdx = direction === "up" ? idx - 1 : idx + 1
+    if (targetIdx < 0 || targetIdx >= allChannels.length) return
+
+    // Swap locally for instant feedback
+    const reordered = [...allChannels]
+    ;[reordered[idx], reordered[targetIdx]] = [reordered[targetIdx], reordered[idx]]
+
+    // Update categories with the new flat order (single category)
+    setCategories((prev) => {
+      const flat = prev.flatMap((c) => c.channels)
+      const swapped = [...flat]
+      const i = swapped.findIndex((c) => c.id === channelId)
+      const ti = direction === "up" ? i - 1 : i + 1
+      if (i < 0 || ti < 0 || ti >= swapped.length) return prev
+      ;[swapped[i], swapped[ti]] = [swapped[ti], swapped[i]]
+      // Rebuild categories preserving structure
+      let cursor = 0
+      return prev.map((cat) => {
+        const channels = swapped.slice(cursor, cursor + cat.channels.length)
+        cursor += cat.channels.length
+        return { ...cat, channels }
+      })
+    })
+
+    // Persist to backend
+    const ids = reordered.map((c) => c.id)
+    try {
+      await reorderChannels(activeServer, ids)
+    } catch {
+      // Revert on failure by re-fetching
+      const cats = await getCategories(activeServer)
+      setCategories(cats)
+    }
+  }
+
   const openLeaveModal = () => {
     setLeaveError("")
     setLeaveOpen(true)
@@ -984,6 +1027,22 @@ export default function ChatScreen() {
                     </Text>
                     {isOwner && isRealServerId(activeServer) && active ? (
                       <View style={{ flexDirection: "row", gap: 2 }}>
+                        <PressableScale
+                          onPress={() => handleMoveChannel(ch.id, "up")}
+                          accessibilityLabel={`Mover canal ${ch.name} arriba`}
+                          hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
+                          style={{ padding: 3, borderRadius: 6 }}
+                        >
+                          <Ionicons name="chevron-up" size={11} color="#8DA8AC" />
+                        </PressableScale>
+                        <PressableScale
+                          onPress={() => handleMoveChannel(ch.id, "down")}
+                          accessibilityLabel={`Mover canal ${ch.name} abajo`}
+                          hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
+                          style={{ padding: 3, borderRadius: 6 }}
+                        >
+                          <Ionicons name="chevron-down" size={11} color="#8DA8AC" />
+                        </PressableScale>
                         <PressableScale
                           onPress={() => openEditChannel(ch)}
                           accessibilityLabel={`Editar canal ${ch.name}`}

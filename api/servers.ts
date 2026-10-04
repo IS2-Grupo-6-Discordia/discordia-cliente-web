@@ -412,6 +412,23 @@ export async function updateChannel(
   })
 }
 
+// ---- Channels: reorder ------------------------------------------------------
+
+// Reorder all channels in a server. `channelIds` is the full list in the desired order.
+export async function reorderChannels(
+  serverId: string,
+  channelIds: string[],
+): Promise<BackendChannel[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return channelIds.map((id, i) => ({ id, name: `ch-${i}`, type: "text" as const, topic: null }))
+  }
+  return api<BackendChannel[]>(`/servers/${serverId}/channels/reorder`, {
+    method: "PUT",
+    body: JSON.stringify({ channel_ids: channelIds }),
+  })
+}
+
 // ---- HU-7: ownership transfer -----------------------------------------------
 
 interface BackendOwnershipTransfer {

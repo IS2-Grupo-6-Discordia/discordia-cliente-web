@@ -427,6 +427,22 @@ export async function updateChannel(
   })
 }
 
+// Create a channel inside a server. Returns the new channel.
+export async function createChannel(
+  serverId: string,
+  data: { name: string; type: "text" | "voice" },
+): Promise<BackendChannel> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    const id = "ch-" + Math.random().toString(36).slice(2, 10)
+    return { id, name: data.name, type: data.type, topic: null }
+  }
+  return api<BackendChannel>(`/servers/${serverId}/channels`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
 // ---- Channels: reorder ------------------------------------------------------
 
 // Reorder all channels in a server. `channelIds` is the full list in the desired order.

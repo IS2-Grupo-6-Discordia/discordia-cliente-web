@@ -4,7 +4,7 @@ import type { Server, Category, RoleGroup, Invite, ServerMember, OwnershipTransf
 
 // Reads always stay mocked: the backend does NOT expose GET /servers,
 // GET categories, or GET roles endpoints yet, so there is nothing to call.
-const READ_USE_MOCK = true
+const READ_USE_MOCK = false
 // Writes hit the real backend whenever an API URL is configured.
 const WRITE_USE_MOCK = !process.env.EXPO_PUBLIC_API_URL
 
@@ -95,7 +95,22 @@ export async function getCategories(serverId: string): Promise<Category[]> {
   if (READ_USE_MOCK) {
     return serverId === MOCK_SERVER_ID ? MOCK_CATEGORIES : starterCategories(serverId)
   }
-  return api<Category[]>(`/servers/${serverId}/categories`)
+
+  const channels = await api<BackendChannel[]>(`/servers/${serverId}/channels`)
+  // The backend has no concept of categories — group all channels into one.
+  if (channels.length === 0) return []
+  return [
+    {
+      id: `${serverId}:channels`,
+      name: "Canales",
+      channels: channels.map((ch) => ({
+        id: ch.id,
+        name: ch.name,
+        type: ch.type,
+        topic: ch.topic,
+      })),
+    },
+  ]
 }
 
 export async function getRoles(serverId: string): Promise<RoleGroup[]> {

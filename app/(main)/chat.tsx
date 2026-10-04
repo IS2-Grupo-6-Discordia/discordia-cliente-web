@@ -26,6 +26,10 @@ import {
   revokeInvite,
   joinServer,
   leaveServer,
+  deleteChannel,
+  updateChannel,
+  reorderChannels,
+  createChannel,
   startOwnershipTransfer,
   getPendingTransfer,
   acceptOwnershipTransfer,
@@ -216,6 +220,27 @@ export default function ChatScreen() {
   const [invitesLoading, setInvitesLoading] = useState(false)
   const [invitesError, setInvitesError] = useState("")
   const [revokingId, setRevokingId] = useState<string | null>(null)
+
+  // Delete-channel confirmation
+  const [deleteChOpen, setDeleteChOpen] = useState(false)
+  const [deleteChTarget, setDeleteChTarget] = useState<{ id: string; name: string } | null>(null)
+  const [deleteChBusy, setDeleteChBusy] = useState(false)
+  const [deleteChError, setDeleteChError] = useState("")
+
+  // Edit-channel modal
+  const [editChOpen, setEditChOpen] = useState(false)
+  const [editChTarget, setEditChTarget] = useState<{ id: string; name: string; topic?: string | null } | null>(null)
+  const [editChName, setEditChName] = useState("")
+  const [editChTopic, setEditChTopic] = useState("")
+  const [editChBusy, setEditChBusy] = useState(false)
+  const [editChError, setEditChError] = useState("")
+
+  // Create-channel modal
+  const [createChOpen, setCreateChOpen] = useState(false)
+  const [createChName, setCreateChName] = useState("")
+  const [createChType, setCreateChType] = useState<"text" | "voice">("text")
+  const [createChBusy, setCreateChBusy] = useState(false)
+  const [createChError, setCreateChError] = useState("")
 
   // Leave-server confirmation (HU-5)
   const [leaveOpen, setLeaveOpen] = useState(false)
@@ -586,6 +611,184 @@ export default function ChatScreen() {
     }
   }
 
+  // ---- Channel delete --------------------------------------------------------
+
+  const openDeleteChannel = (ch: { id: string; name: string }) => {
+    setDeleteChTarget(ch)
+    setDeleteChError("")
+    setDeleteChOpen(true)
+  }
+
+  const handleDeleteChannel = async () => {
+    if (!deleteChTarget || !isRealServerId(activeServer)) return
+    setDeleteChBusy(true)
+    setDeleteChError("")
+    try {
+      await deleteChannel(activeServer, deleteChTarget.id)
+      setCategories((prev) =>
+        prev.map((cat) => ({
+          ...cat,
+          channels: cat.channels.filter((ch) => ch.id !== deleteChTarget.id),
+        })),
+      )
+      if (activeChannel === deleteChTarget.id) {
+        const firstText = categories
+          .flatMap((c) => c.channels)
+          .find((c) => c.id !== deleteChTarget.id && c.type === "text")
+        setActiveChannel(firstText?.id ?? "")
+      }
+      setDeleteChOpen(false)
+    } catch (err) {
+      setDeleteChError(friendlyError(err))
+    } finally {
+      setDeleteChBusy(false)
+    }
+  }
+
+  // ---- Channel edit ---------------------------------------------------------
+
+  const openEditChannel = (ch: { id: string; name: string; topic?: string | null }) => {
+    setEditChTarget(ch)
+    setEditChName(ch.name)
+    setEditChTopic(ch.topic ?? "")
+    setEditChError("")
+    setEditChOpen(true)
+  }
+
+  const handleEditChannel = async () => {
+    if (!editChTarget || !isRealServerId(activeServer)) return
+    const trimmedName = editChName.trim()
+    if (!trimmedName) {
+      setEditChError("El nombre no puede estar vacío.")
+      return
+    }
+    setEditChBusy(true)
+    setEditChError("")
+    try {
+      const data: { name?: string; topic?: string | null } = {}
+      if (trimmedName !== editChTarget.name) data.name = trimmedName
+      const newTopic = editChTopic.trim() || null
+      const oldTopic = editChTarget.topic ?? null
+      if (newTopic !== oldTopic) data.topic = newTopic
+
+      if (Object.keys(data).length === 0) {
+        setEditChOpen(false)
+        return
+      }
+
+      const updated = await updateChannel(activeServer, editChTarget.id, data)
+      setCategories((prev) =>
+        prev.map((cat) => ({
+          ...cat,
+          channels: cat.channels.map((ch) =>
+            ch.id === editChTarget.id
+              ? { ...ch, name: updated.name, topic: updated.topic }
+              : ch,
+          ),
+        })),
+      )
+      setEditChOpen(false)
+    } catch (err) {
+      setEditChError(friendlyError(err))
+    } finally {
+      setEditChBusy(false)
+    }
+  }
+
+  // ---- Channel create --------------------------------------------------------
+
+  const openCreateChannel = () => {
+    setCreateChName("")
+    setCreateChType("text")
+    setCreateChError("")
+    setCreateChOpen(true)
+  }
+
+  const handleCreateChannel = async () => {
+    if (!isRealServerId(activeServer)) return
+    const trimmedName = createChName.trim()
+    if (!trimmedName) {
+      setCreateChError("Poné un nombre para el canal.")
+      return
+    }
+    // Local duplicate check
+    const allChannels = categories.flatMap((c) => c.channels)
+    if (allChannels.some((ch) => ch.name.toLowerCase() === trimmedName.toLowerCase())) {
+      setCreateChError("Ya existe un canal con ese nombre.")
+      return
+    }
+    setCreateChBusy(true)
+    setCreateChError("")
+    try {
+      const created = await createChannel(activeServer, { name: trimmedName, type: createChType })
+      setCategories((prev) => {
+        if (prev.length === 0) {
+          return [{ id: `${activeServer}:channels`, name: "Canales", channels: [{ id: created.id, name: created.name, type: created.type, topic: created.topic }] }]
+        }
+        // Append to the last category
+        return prev.map((cat, i) =>
+          i === prev.length - 1
+            ? { ...cat, channels: [...cat.channels, { id: created.id, name: created.name, type: created.type, topic: created.topic }] }
+            : cat,
+        )
+      })
+      setActiveChannel(created.id)
+      setCreateChOpen(false)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setCreateChError("Ya existe un canal con ese nombre.")
+      } else if (err instanceof ApiError && err.status === 403) {
+        setCreateChError("No tenés permisos para crear canales.")
+      } else {
+        setCreateChError(friendlyError(err))
+      }
+    } finally {
+      setCreateChBusy(false)
+    }
+  }
+
+  // ---- Channel reorder ------------------------------------------------------
+
+  const handleMoveChannel = async (channelId: string, direction: "up" | "down") => {
+    if (!isRealServerId(activeServer)) return
+    const allChannels = categories.flatMap((c) => c.channels)
+    const idx = allChannels.findIndex((c) => c.id === channelId)
+    if (idx < 0) return
+    const targetIdx = direction === "up" ? idx - 1 : idx + 1
+    if (targetIdx < 0 || targetIdx >= allChannels.length) return
+
+    // Swap locally for instant feedback
+    const reordered = [...allChannels]
+    ;[reordered[idx], reordered[targetIdx]] = [reordered[targetIdx], reordered[idx]]
+
+    // Update categories with the new flat order (single category)
+    setCategories((prev) => {
+      const flat = prev.flatMap((c) => c.channels)
+      const swapped = [...flat]
+      const i = swapped.findIndex((c) => c.id === channelId)
+      const ti = direction === "up" ? i - 1 : i + 1
+      if (i < 0 || ti < 0 || ti >= swapped.length) return prev
+      ;[swapped[i], swapped[ti]] = [swapped[ti], swapped[i]]
+      // Rebuild categories preserving structure
+      let cursor = 0
+      return prev.map((cat) => {
+        const channels = swapped.slice(cursor, cursor + cat.channels.length)
+        cursor += cat.channels.length
+        return { ...cat, channels }
+      })
+    })
+
+    // Persist to backend
+    const ids = reordered.map((c) => c.id)
+    try {
+      await reorderChannels(activeServer, ids)
+    } catch {
+      // Revert on failure by re-fetching
+      const cats = await getCategories(activeServer)
+      setCategories(cats)
+    }
+  }
+
   const openLeaveModal = () => {
     setLeaveError("")
     setLeaveOpen(true)
@@ -850,10 +1053,20 @@ export default function ChatScreen() {
         <ScrollView style={{ flex: 1 }}>
           {categories.map((cat) => (
             <View key={cat.id}>
-              <View style={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 4 }}>
+              <View style={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 4, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                 <Text style={{ color: "#8DA8AC", fontWeight: "700", textTransform: "uppercase", fontSize: 9.5, letterSpacing: 1.3 }}>
                   {cat.name}
                 </Text>
+                {isOwner && isRealServerId(activeServer) ? (
+                  <PressableScale
+                    onPress={openCreateChannel}
+                    accessibilityLabel="Crear canal"
+                    hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
+                    style={{ padding: 3, borderRadius: 6 }}
+                  >
+                    <Ionicons name="add" size={14} color="#8DA8AC" />
+                  </PressableScale>
+                ) : null}
               </View>
               {cat.channels.map((ch) => {
                 const active = activeChannel === ch.id
@@ -888,6 +1101,42 @@ export default function ChatScreen() {
                     >
                       {ch.name}
                     </Text>
+                    {isOwner && isRealServerId(activeServer) && active ? (
+                      <View style={{ flexDirection: "row", gap: 2 }}>
+                        <PressableScale
+                          onPress={() => handleMoveChannel(ch.id, "up")}
+                          accessibilityLabel={`Mover canal ${ch.name} arriba`}
+                          hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
+                          style={{ padding: 3, borderRadius: 6 }}
+                        >
+                          <Ionicons name="chevron-up" size={11} color="#8DA8AC" />
+                        </PressableScale>
+                        <PressableScale
+                          onPress={() => handleMoveChannel(ch.id, "down")}
+                          accessibilityLabel={`Mover canal ${ch.name} abajo`}
+                          hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
+                          style={{ padding: 3, borderRadius: 6 }}
+                        >
+                          <Ionicons name="chevron-down" size={11} color="#8DA8AC" />
+                        </PressableScale>
+                        <PressableScale
+                          onPress={() => openEditChannel(ch)}
+                          accessibilityLabel={`Editar canal ${ch.name}`}
+                          hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
+                          style={{ padding: 3, borderRadius: 6 }}
+                        >
+                          <Ionicons name="pencil-outline" size={11} color="#8DA8AC" />
+                        </PressableScale>
+                        <PressableScale
+                          onPress={() => openDeleteChannel(ch)}
+                          accessibilityLabel={`Eliminar canal ${ch.name}`}
+                          hoverStyle={{ backgroundColor: "rgba(255,127,114,0.14)" }}
+                          style={{ padding: 3, borderRadius: 6 }}
+                        >
+                          <Ionicons name="trash-outline" size={11} color="#FF9E94" />
+                        </PressableScale>
+                      </View>
+                    ) : null}
                     {ch.mention ? (
                       <View style={{ backgroundColor: "#FF7F72", borderRadius: 9999, paddingHorizontal: 6, paddingVertical: 1 }}>
                         <Text style={{ color: "#FFFFFF", fontSize: 9, fontWeight: "800" }}>
@@ -1595,6 +1844,197 @@ export default function ChatScreen() {
             </View>
           </ScrollView>
         )}
+      </ModalShell>
+
+      {/* Delete-channel confirmation */}
+      <ModalShell
+        visible={deleteChOpen}
+        onClose={() => setDeleteChOpen(false)}
+        title="Eliminar canal"
+      >
+        <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 18 }}>
+          ¿Seguro que querés eliminar{" "}
+          <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>
+            #{deleteChTarget?.name ?? "este canal"}
+          </Text>
+          ? Se perderá todo su historial de mensajes de forma permanente.
+        </Text>
+
+        {deleteChError ? (
+          <View style={NOTICE_ERROR}>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{deleteChError}</Text>
+          </View>
+        ) : null}
+
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <PressableScale
+            onPress={() => setDeleteChOpen(false)}
+            disabled={deleteChBusy}
+            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
+            style={{
+              flex: 1,
+              borderRadius: 10,
+              paddingVertical: 12,
+              alignItems: "center",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.10)",
+              backgroundColor: "rgba(255,255,255,0.06)",
+            }}
+          >
+            <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
+          </PressableScale>
+          <PressableScale
+            onPress={handleDeleteChannel}
+            disabled={deleteChBusy}
+            style={{
+              flex: 1,
+              borderRadius: 10,
+              paddingVertical: 12,
+              alignItems: "center",
+              backgroundColor: "#FF7F72",
+              opacity: deleteChBusy ? 0.7 : 1,
+            }}
+          >
+            {deleteChBusy ? (
+              <ActivityIndicator color="#04211D" />
+            ) : (
+              <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>Eliminar</Text>
+            )}
+          </PressableScale>
+        </View>
+      </ModalShell>
+
+      {/* Edit-channel modal */}
+      <ModalShell
+        visible={editChOpen}
+        onClose={() => setEditChOpen(false)}
+        title="Editar canal"
+      >
+        {editChError ? (
+          <View style={NOTICE_ERROR}>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{editChError}</Text>
+          </View>
+        ) : null}
+
+        <Text style={LABEL}>Nombre</Text>
+        <TextInput
+          value={editChName}
+          onChangeText={setEditChName}
+          placeholder="nombre-del-canal"
+          placeholderTextColor="#5E7E82"
+          maxLength={100}
+          autoCapitalize="none"
+          style={[FIELD, { marginBottom: 14 }]}
+        />
+
+        <Text style={LABEL}>Tema (opcional)</Text>
+        <TextInput
+          value={editChTopic}
+          onChangeText={setEditChTopic}
+          placeholder="¿De qué se habla en este canal?"
+          placeholderTextColor="#5E7E82"
+          maxLength={256}
+          autoCapitalize="none"
+          style={[FIELD, { marginBottom: 18 }]}
+        />
+
+        <PressableScale
+          onPress={handleEditChannel}
+          disabled={editChBusy || !editChName.trim()}
+          style={[PRIMARY_BTN, { opacity: editChBusy || !editChName.trim() ? 0.5 : 1 }]}
+        >
+          {editChBusy ? (
+            <ActivityIndicator color="#04211D" />
+          ) : (
+            <Text style={PRIMARY_TXT}>Guardar</Text>
+          )}
+        </PressableScale>
+      </ModalShell>
+
+      {/* Create-channel modal */}
+      <ModalShell
+        visible={createChOpen}
+        onClose={() => setCreateChOpen(false)}
+        title="Crear canal"
+      >
+        {createChError ? (
+          <View style={NOTICE_ERROR}>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{createChError}</Text>
+          </View>
+        ) : null}
+
+        <Text style={LABEL}>Nombre</Text>
+        <TextInput
+          value={createChName}
+          onChangeText={setCreateChName}
+          placeholder="nombre-del-canal"
+          placeholderTextColor="#5E7E82"
+          maxLength={100}
+          autoCapitalize="none"
+          style={[FIELD, { marginBottom: 14 }]}
+        />
+
+        <Text style={LABEL}>Tipo</Text>
+        <View style={{ flexDirection: "row", gap: 8, marginBottom: 18 }}>
+          <PressableScale
+            onPress={() => setCreateChType("text")}
+            style={{
+              flex: 1,
+              paddingVertical: 10,
+              borderRadius: 8,
+              borderWidth: 1.5,
+              borderColor: createChType === "text" ? "#37D6C0" : "#1A3A3A",
+              backgroundColor: createChType === "text" ? "rgba(55,214,192,0.12)" : "transparent",
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: createChType === "text" ? "#37D6C0" : "#8DA8AC", fontWeight: "700", fontSize: 15 }}>#</Text>
+            <Text style={{ color: createChType === "text" ? "#E6F3F3" : "#8DA8AC", fontSize: 11, marginTop: 2 }}>Texto</Text>
+          </PressableScale>
+          <PressableScale
+            onPress={() => setCreateChType("voice")}
+            style={{
+              flex: 1,
+              paddingVertical: 10,
+              borderRadius: 8,
+              borderWidth: 1.5,
+              borderColor: createChType === "voice" ? "#37D6C0" : "#1A3A3A",
+              backgroundColor: createChType === "voice" ? "rgba(55,214,192,0.12)" : "transparent",
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ color: createChType === "voice" ? "#37D6C0" : "#8DA8AC", fontWeight: "700", fontSize: 15 }}>♪</Text>
+            <Text style={{ color: createChType === "voice" ? "#E6F3F3" : "#8DA8AC", fontSize: 11, marginTop: 2 }}>Voz</Text>
+          </PressableScale>
+        </View>
+
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <PressableScale
+            onPress={() => setCreateChOpen(false)}
+            style={{
+              flex: 1,
+              alignItems: "center",
+              paddingVertical: 12,
+              borderRadius: 10,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.10)",
+              backgroundColor: "rgba(255,255,255,0.06)",
+            }}
+          >
+            <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
+          </PressableScale>
+          <PressableScale
+            onPress={handleCreateChannel}
+            disabled={createChBusy || !createChName.trim()}
+            style={[PRIMARY_BTN, { flex: 1, opacity: createChBusy || !createChName.trim() ? 0.5 : 1 }]}
+          >
+            {createChBusy ? (
+              <ActivityIndicator color="#04211D" />
+            ) : (
+              <Text style={PRIMARY_TXT}>Crear canal</Text>
+            )}
+          </PressableScale>
+        </View>
       </ModalShell>
 
       {/* Leave-server confirmation (HU-5) */}

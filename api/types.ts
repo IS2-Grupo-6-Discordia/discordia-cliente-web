@@ -81,6 +81,7 @@ export interface Channel {
   id: string
   name: string
   type: "text" | "voice"
+  topic?: string | null
   unread?: boolean
   mention?: number
 }
@@ -141,6 +142,15 @@ export interface AdminUser {
   servers: number
   reports: number
   date: string
+}
+
+export interface AdminServer {
+  id: string
+  name: string
+  iconUrl: string | null
+  ownerId: string
+  memberCount: number
+  createdAt: string
 }
 
 export interface KPI {

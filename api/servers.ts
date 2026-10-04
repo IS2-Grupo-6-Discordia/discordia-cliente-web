@@ -4,7 +4,7 @@ import type { Server, Category, RoleGroup, Invite, ServerMember, OwnershipTransf
 
 // Reads always stay mocked: the backend does NOT expose GET /servers,
 // GET categories, or GET roles endpoints yet, so there is nothing to call.
-const READ_USE_MOCK = true
+const READ_USE_MOCK = false
 // Writes hit the real backend whenever an API URL is configured.
 const WRITE_USE_MOCK = !process.env.EXPO_PUBLIC_API_URL
 
@@ -95,7 +95,22 @@ export async function getCategories(serverId: string): Promise<Category[]> {
   if (READ_USE_MOCK) {
     return serverId === MOCK_SERVER_ID ? MOCK_CATEGORIES : starterCategories(serverId)
   }
-  return api<Category[]>(`/servers/${serverId}/categories`)
+
+  const channels = await api<BackendChannel[]>(`/servers/${serverId}/channels`)
+  // The backend has no concept of categories — group all channels into one.
+  if (channels.length === 0) return []
+  return [
+    {
+      id: `${serverId}:channels`,
+      name: "Canales",
+      channels: channels.map((ch) => ({
+        id: ch.id,
+        name: ch.name,
+        type: ch.type,
+        topic: ch.topic,
+      })),
+    },
+  ]
 }
 
 export async function getRoles(serverId: string): Promise<RoleGroup[]> {
@@ -141,6 +156,7 @@ interface BackendChannel {
   id: string
   name: string
   type: "text" | "voice"
+  topic?: string | null
 }
 
 // A server as returned by GET /servers (the sidebar list): no channels.
@@ -392,6 +408,66 @@ export async function getServerMembers(serverId: string): Promise<ServerMember[]
       status: profile?.status ?? "offline",
       joinedAt: row.joined_at,
     }
+  })
+}
+
+// ---- Channels: delete + update -----------------------------------------------
+
+// Delete a channel. Backend returns 204 No Content on success.
+export async function deleteChannel(serverId: string, channelId: string): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+  await api<void>(`/servers/${serverId}/channels/${channelId}`, { method: "DELETE" })
+}
+
+// Update a channel's name and/or topic. Returns the updated channel.
+export async function updateChannel(
+  serverId: string,
+  channelId: string,
+  data: { name?: string; topic?: string | null },
+): Promise<BackendChannel> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return { id: channelId, name: data.name ?? "canal", type: "text", topic: data.topic ?? null }
+  }
+  return api<BackendChannel>(`/servers/${serverId}/channels/${channelId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  })
+}
+
+// Create a channel inside a server. Returns the new channel.
+export async function createChannel(
+  serverId: string,
+  data: { name: string; type: "text" | "voice" },
+): Promise<BackendChannel> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    const id = "ch-" + Math.random().toString(36).slice(2, 10)
+    return { id, name: data.name, type: data.type, topic: null }
+  }
+  return api<BackendChannel>(`/servers/${serverId}/channels`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+}
+
+// ---- Channels: reorder ------------------------------------------------------
+
+// Reorder all channels in a server. `channelIds` is the full list in the desired order.
+export async function reorderChannels(
+  serverId: string,
+  channelIds: string[],
+): Promise<BackendChannel[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return channelIds.map((id, i) => ({ id, name: `ch-${i}`, type: "text" as const, topic: null }))
+  }
+  return api<BackendChannel[]>(`/servers/${serverId}/channels/reorder`, {
+    method: "PUT",
+    body: JSON.stringify({ channel_ids: channelIds }),
   })
 }
 

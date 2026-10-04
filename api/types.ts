@@ -74,6 +74,7 @@ export interface Channel {
   id: string
   name: string
   type: "text" | "voice"
+  topic?: string | null
   unread?: boolean
   mention?: number
 }

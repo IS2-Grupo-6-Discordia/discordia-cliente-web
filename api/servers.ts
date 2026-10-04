@@ -141,6 +141,7 @@ interface BackendChannel {
   id: string
   name: string
   type: "text" | "voice"
+  topic?: string | null
 }
 
 // A server as returned by GET /servers (the sidebar list): no channels.
@@ -381,6 +382,33 @@ export async function getServerMembers(serverId: string): Promise<ServerMember[]
       avatarUrl: profile?.avatarUrl ?? null,
       joinedAt: row.joined_at,
     }
+  })
+}
+
+// ---- Channels: delete + update -----------------------------------------------
+
+// Delete a channel. Backend returns 204 No Content on success.
+export async function deleteChannel(serverId: string, channelId: string): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+  await api<void>(`/servers/${serverId}/channels/${channelId}`, { method: "DELETE" })
+}
+
+// Update a channel's name and/or topic. Returns the updated channel.
+export async function updateChannel(
+  serverId: string,
+  channelId: string,
+  data: { name?: string; topic?: string | null },
+): Promise<BackendChannel> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return { id: channelId, name: data.name ?? "canal", type: "text", topic: data.topic ?? null }
+  }
+  return api<BackendChannel>(`/servers/${serverId}/channels/${channelId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
   })
 }
 

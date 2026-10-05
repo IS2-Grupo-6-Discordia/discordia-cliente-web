@@ -124,39 +124,3 @@ export interface Message {
   reactions?: { emoji: string; count: number; mine?: boolean }[]
 }
 
-export interface AuditEntry {
-  id: string
-  action: string
-  actor: string
-  target: string
-  time: string
-  reason: string
-}
-
-export interface AdminUser {
-  name: string
-  email: string
-  av: string
-  status: string
-  tag: "ok" | "sus" | "warn"
-  servers: number
-  reports: number
-  date: string
-}
-
-export interface AdminServer {
-  id: string
-  name: string
-  iconUrl: string | null
-  ownerId: string
-  memberCount: number
-  createdAt: string
-}
-
-export interface KPI {
-  label: string
-  value: string
-  delta: string
-  warn: boolean
-  spark: number[]
-}

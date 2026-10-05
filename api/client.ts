@@ -56,6 +56,7 @@ const GENERIC_ERROR_BY_STATUS: Record<number, string> = {
   401: "Tu sesión expiró. Iniciá sesión de nuevo.",
   403: "No tenés permiso para hacer esto.",
   404: "No encontramos lo que buscabas.",
+  429: "Hiciste muchos intentos seguidos. Esperá unos segundos y probá de nuevo.",
   408: "El servidor tardó demasiado en responder. Probá de nuevo.",
   504: "El servidor tardó demasiado en responder. Probá de nuevo.",
 }
@@ -82,6 +83,7 @@ export function friendlyError(err: unknown): string {
   console.warn("[friendlyError]", err)
 
   if (err instanceof ApiError) {
+    if (err.status === 429) return genericForStatus(429)
     // Business errors (401/403/404/409...) arrive as a human Spanish string in
     // `detail`; 422 validation errors arrive as an array/object, and 5xx are
     // never trustworthy for display -> fall back to a generic message.

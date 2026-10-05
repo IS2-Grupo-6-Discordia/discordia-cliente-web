@@ -111,14 +111,6 @@ export default function MainLayout() {
         }}
       />
       <Tabs.Screen
-        name="backoffice"
-        options={{
-          title: "Backoffice",
-          tabBarLabel: "Backoffice",
-          tabBarIcon: tabIcon("shield-checkmark", "shield-checkmark-outline"),
-        }}
-      />
-      <Tabs.Screen
         name="profile"
         options={{ href: null, title: "Perfil" }}
       />

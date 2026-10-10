@@ -161,6 +161,8 @@ const NOTICE_OK: ViewStyle = {
   borderColor: "rgba(55,214,192,0.30)",
 }
 
+const PRESENCE_REFRESH_MS = 15_000
+
 export default function ChatScreen() {
   const router = useRouter()
   const { serverId: requestedServerId } = useLocalSearchParams<{ serverId?: string }>()
@@ -296,6 +298,22 @@ export default function ChatScreen() {
     getServerMembers(activeServer)
       .then((members) => setRoles(membersToRoleGroups(members)))
       .catch(() => setRoles([]))
+  }, [activeServer])
+
+  useEffect(() => {
+    if (!activeServer || !isRealServerId(activeServer)) return
+    let active = true
+    const timer = setInterval(() => {
+      getServerMembers(activeServer)
+        .then((members) => {
+          if (active) setRoles(membersToRoleGroups(members))
+        })
+        .catch(() => undefined)
+    }, PRESENCE_REFRESH_MS)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
   }, [activeServer])
 
   useEffect(() => {

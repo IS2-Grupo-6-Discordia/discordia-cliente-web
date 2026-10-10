@@ -3,9 +3,10 @@ import type { ReactNode } from "react"
 import type { User } from "@/api/types"
 import { Platform } from "react-native"
 import { ApiError, getToken, loadToken } from "@/api/client"
-import { getMe, logout as apiLogout } from "@/api/auth"
+import { getMe, logout as apiLogout, sendPresence } from "@/api/auth"
 
-const ACCOUNT_CHECK_INTERVAL_MS = 60_000
+const PRESENCE_HEARTBEAT_MS = 30_000
+const PRESENCE_IMMEDIATE_THROTTLE_MS = 5_000
 
 export type SignedOutReason = "suspended" | "expired"
 
@@ -81,32 +82,79 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isLoggedIn) return
     let active = true
+    let interacted = true
+    let lastSentActive = true
+    let lastImmediate = 0
 
-    const checkAccount = async () => {
+    const handleSessionError = (err: unknown) => {
+      if (!active || !(err instanceof ApiError)) return
+      if (err.status === 404) signOutWithReason("suspended")
+      else if (err.status === 401) signOutWithReason("expired")
+    }
+
+    const heartbeat = async () => {
+      if (!getToken()) return
+      const wasActive = interacted
+      interacted = false
+      lastSentActive = wasActive
+      try {
+        await sendPresence({ active: wasActive })
+      } catch (err) {
+        handleSessionError(err)
+      }
+    }
+
+    const refreshProfile = async () => {
       if (checking.current || !getToken()) return
       checking.current = true
       try {
         const fresh = await getMe()
         if (active) setUser(fresh)
       } catch (err) {
-        if (!active || !(err instanceof ApiError)) return
-        if (err.status === 404) signOutWithReason("suspended")
-        else if (err.status === 401) signOutWithReason("expired")
+        handleSessionError(err)
       } finally {
         checking.current = false
       }
     }
 
-    const interval = setInterval(checkAccount, ACCOUNT_CHECK_INTERVAL_MS)
-    const onVisible = () => {
-      if (document.visibilityState === "visible") checkAccount()
+    const onActivity = () => {
+      interacted = true
+      const now = Date.now()
+      if (!lastSentActive && now - lastImmediate > PRESENCE_IMMEDIATE_THROTTLE_MS) {
+        lastImmediate = now
+        heartbeat()
+      }
     }
-    if (Platform.OS === "web") document.addEventListener("visibilitychange", onVisible)
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        interacted = true
+        heartbeat()
+        refreshProfile()
+      }
+    }
+
+    const onLeave = () => {
+      if (getToken()) sendPresence({ active: false, leaving: true }).catch(() => undefined)
+    }
+
+    heartbeat()
+    const interval = setInterval(heartbeat, PRESENCE_HEARTBEAT_MS)
+    const activityEvents = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"]
+    if (Platform.OS === "web") {
+      activityEvents.forEach((e) => window.addEventListener(e, onActivity, { passive: true }))
+      document.addEventListener("visibilitychange", onVisible)
+      window.addEventListener("pagehide", onLeave)
+    }
 
     return () => {
       active = false
       clearInterval(interval)
-      if (Platform.OS === "web") document.removeEventListener("visibilitychange", onVisible)
+      if (Platform.OS === "web") {
+        activityEvents.forEach((e) => window.removeEventListener(e, onActivity))
+        document.removeEventListener("visibilitychange", onVisible)
+        window.removeEventListener("pagehide", onLeave)
+      }
     }
   }, [isLoggedIn, setUser, signOutWithReason])
 

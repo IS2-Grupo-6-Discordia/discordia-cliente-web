@@ -19,6 +19,7 @@ import { PresenceDot, STATUS_LABELS } from "@/components/StatusDot"
 import type { PublicUser, Server } from "@/api/types"
 
 const CARD_BG = "#0B1822"
+const PRESENCE_REFRESH_MS = 15_000
 
 const labelStyle = {
   color: "#8DA8AC",
@@ -104,6 +105,23 @@ export default function PublicProfileScreen() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, user?.id])
+
+  useEffect(() => {
+    if (!id || notFound || (user?.id && id === user.id)) return
+    let active = true
+    const timer = setInterval(async () => {
+      try {
+        const data = await getUserById(String(id))
+        if (active) setProfile(data)
+      } catch (err) {
+        if (active && err instanceof ApiError && err.status === 404) setNotFound(true)
+      }
+    }, PRESENCE_REFRESH_MS)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [id, notFound, user?.id])
 
   return (
     <View style={{ flex: 1, backgroundColor: "#0A1620" }}>

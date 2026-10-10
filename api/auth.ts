@@ -212,6 +212,15 @@ export async function updateProfile(updates: {
   return toUser(res)
 }
 
+export async function sendPresence(opts: { active: boolean; leaving?: boolean }): Promise<void> {
+  if (USE_MOCK) return
+  await api("/auth/users/me/presence", {
+    method: "POST",
+    body: JSON.stringify({ active: opts.active, leaving: !!opts.leaving }),
+    keepalive: !!opts.leaving,
+  })
+}
+
 export async function getMe(): Promise<User> {
   if (USE_MOCK) {
     await mockDelay(500)

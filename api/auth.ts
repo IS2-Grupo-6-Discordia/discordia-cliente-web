@@ -1,4 +1,5 @@
 import { api, apiUpload, ApiError, getRefreshToken, setRefreshToken, setToken } from "./client"
+import { File as NativeFile } from "expo-file-system"
 import type { AuthResponse, PresenceStatus, PublicUser, User, UserStatus } from "./types"
 
 const USE_MOCK = !process.env.EXPO_PUBLIC_API_URL
@@ -296,7 +297,7 @@ export async function updateAvatar(
   if (file instanceof Blob) {
     fd.append("file", file, "avatar")
   } else {
-    fd.append("file", file as any)
+    fd.append("file", new NativeFile(file.uri) as any)
   }
   const res = await apiUpload<BackendUser>("/auth/users/me/avatar", fd)
   return toUser(res)

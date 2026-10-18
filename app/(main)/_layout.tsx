@@ -1,5 +1,6 @@
 import { Tabs, useRouter, Redirect } from "expo-router"
 import { View, Text, TouchableOpacity, Platform } from "react-native"
+import type { ColorValue } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
 import UserMenu from "@/components/UserMenu"
@@ -9,7 +10,7 @@ import SessionSplash from "@/components/SessionSplash"
 // navigation (the default had no icons, which rendered as confusing ▼ glyphs).
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"]
 function tabIcon(active: IoniconName, inactive: IoniconName) {
-  return ({ color, size, focused }: { color: string; size: number; focused: boolean }) => (
+  return ({ color, size, focused }: { color: ColorValue; size: number; focused: boolean }) => (
     <Ionicons name={focused ? active : inactive} size={size} color={color} />
   )
 }
@@ -100,14 +101,6 @@ export default function MainLayout() {
           title: "Voz",
           tabBarLabel: "Voz",
           tabBarIcon: tabIcon("headset", "headset-outline"),
-        }}
-      />
-      <Tabs.Screen
-        name="admin"
-        options={{
-          title: "Servidor",
-          tabBarLabel: "Servidor",
-          tabBarIcon: tabIcon("settings", "settings-outline"),
         }}
       />
       <Tabs.Screen

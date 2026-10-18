@@ -21,7 +21,7 @@ const GOOGLE_UNAVAILABLE =
   "No pudimos conectarnos con Google. Ingresá con tu email y contraseña o probá de nuevo en un rato."
 
 export default function LoginScreen() {
-  const { setUser } = useAuth()
+  const { setUser, signedOutReason, clearSignedOutReason } = useAuth()
   const router = useRouter()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -38,6 +38,7 @@ export default function LoginScreen() {
     setError("")
     try {
       const res = await loginWithGoogle(idToken)
+      clearSignedOutReason()
       setUser(res.user)
       router.replace("/(main)/chat")
     } catch (err) {
@@ -62,6 +63,7 @@ export default function LoginScreen() {
     setError("")
     try {
       const res = await login(email, password)
+      clearSignedOutReason()
       setUser(res.user)
       router.replace("/(main)/chat")
     } catch (err) {
@@ -117,6 +119,35 @@ export default function LoginScreen() {
               Tus servidores, canales y llamadas siguen donde los dejaste.
             </Text>
           </View>
+
+          {signedOutReason && !error ? (
+            <View
+              accessibilityRole="alert"
+              style={{
+                flexDirection: "row",
+                alignItems: "flex-start",
+                gap: 8,
+                padding: 10,
+                borderRadius: 12,
+                marginBottom: 12,
+                backgroundColor: "rgba(240,194,75,0.10)",
+                borderWidth: 1,
+                borderColor: "rgba(240,194,75,0.45)",
+              }}
+            >
+              <Ionicons
+                name={signedOutReason === "suspended" ? "ban-outline" : "time-outline"}
+                size={15}
+                color="#F0C24B"
+                style={{ marginTop: 1 }}
+              />
+              <Text style={{ color: "#F3DFA6", fontSize: 12, flex: 1, lineHeight: 17 }}>
+                {signedOutReason === "suspended"
+                  ? "Tu cuenta fue suspendida y se cerró tu sesión. Si creés que es un error, contactá al soporte de Discordia."
+                  : "Tu sesión expiró. Iniciá sesión de nuevo."}
+              </Text>
+            </View>
+          ) : null}
 
           {/* Error */}
           {error ? (

@@ -6,6 +6,8 @@ const RENDER_DEFAULT_WAKE_URLS = [
   "https://microservicio-servidores.onrender.com/readyz",
 ]
 const WAKE_TIMEOUT_MS = 120_000
+const ATTEMPT_TIMEOUT_MS = 30_000
+const RETRY_DELAY_MS = 2_000
 const AWAKE_GRACE_MS = 5 * 60_000
 
 export type WakeState = "idle" | "waking" | "ready" | "failed"
@@ -31,13 +33,26 @@ function setState(next: WakeState) {
   listeners.forEach((listener) => listener(next))
 }
 
-async function ping(url: string): Promise<void> {
+async function attempt(url: string): Promise<void> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), WAKE_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS)
   try {
     await fetch(url, { mode: "no-cors", cache: "no-store", signal: controller.signal })
   } finally {
     clearTimeout(timer)
+  }
+}
+
+async function ping(url: string): Promise<void> {
+  const deadline = Date.now() + WAKE_TIMEOUT_MS
+  for (;;) {
+    try {
+      await attempt(url)
+      return
+    } catch (err) {
+      if (Date.now() + RETRY_DELAY_MS >= deadline) throw err
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS))
+    }
   }
 }
 

@@ -5,6 +5,7 @@ import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
 import UserMenu from "@/components/UserMenu"
 import SessionSplash from "@/components/SessionSplash"
+import { useWakeState } from "@/api/wake"
 
 // Maps each tab to a filled/outline Ionicons pair so the bar reads as real
 // navigation (the default had no icons, which rendered as confusing ▼ glyphs).
@@ -17,6 +18,7 @@ function tabIcon(active: IoniconName, inactive: IoniconName) {
 
 export default function MainLayout() {
   const { isLoggedIn, isLoading } = useAuth()
+  const wake = useWakeState()
   const router = useRouter()
 
   // Al recargar una ruta protegida (p. ej. /(main)/chat) este layout corre antes
@@ -24,6 +26,10 @@ export default function MainLayout() {
   // isLoggedIn es false por un frame y rebota al login aunque haya token.
   if (isLoading) {
     return <SessionSplash />
+  }
+
+  if (wake === "waking") {
+    return <SessionSplash message="Estamos despertando el servidor. La primera vez puede tardar hasta un minuto." />
   }
 
   // Session guard: as soon as the session is cleared (logout button, 401 auto-logout,

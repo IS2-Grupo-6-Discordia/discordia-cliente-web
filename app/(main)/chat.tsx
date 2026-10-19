@@ -38,6 +38,7 @@ import {
 import type { Server, Category, RoleGroup, Member, ServerMember, Message, Invite, OwnershipTransfer } from "@/api/types"
 import { ApiError, friendlyError } from "@/api/client"
 import { useAuth } from "@/context/AuthContext"
+import { useVoice } from "@/context/VoiceContext"
 import { Ionicons } from "@expo/vector-icons"
 import Avatar from "@/components/Avatar"
 import StatusDot, { STATUS_LABELS } from "@/components/StatusDot"
@@ -167,6 +168,7 @@ export default function ChatScreen() {
   const router = useRouter()
   const { serverId: requestedServerId } = useLocalSearchParams<{ serverId?: string }>()
   const { user } = useAuth()
+  const voice = useVoice()
   // No server is selected until the real list loads. Never default to a mock id,
   // or the app boots into a phantom server (and its mock channels/messages) even
   // when the user has none.
@@ -222,6 +224,11 @@ export default function ChatScreen() {
   const [invitesLoading, setInvitesLoading] = useState(false)
   const [invitesError, setInvitesError] = useState("")
   const [revokingId, setRevokingId] = useState<string | null>(null)
+
+  // Join-voice confirmation (HU-17 CA1: the user confirms before connecting)
+  const [voiceJoinTarget, setVoiceJoinTarget] = useState<{ id: string; name: string } | null>(null)
+  const [voiceJoinBusy, setVoiceJoinBusy] = useState(false)
+  const [voiceJoinError, setVoiceJoinError] = useState("")
 
   // Delete-channel confirmation
   const [deleteChOpen, setDeleteChOpen] = useState(false)
@@ -628,6 +635,54 @@ export default function ChatScreen() {
       setInviteError("No pudimos copiar el link. Copialo manualmente.")
     }
   }
+
+  // ---- Voice join (HU-17) ----------------------------------------------------
+
+  // Voice channels don't open a message view: they ask to join, or jump to the
+  // Voz tab when the user is already in that call.
+  const handleChannelPress = (ch: { id: string; name: string; type: "text" | "voice" }) => {
+    if (ch.type === "text") {
+      setActiveChannel(ch.id)
+      return
+    }
+    if (voice.channel?.id === ch.id && voice.status === "connected") {
+      router.push("/(main)/voice")
+      return
+    }
+    voice.clearDropNotice()
+    setVoiceJoinError(
+      !isRealServerId(activeServer)
+        ? MOCK_SERVER_NOTICE
+        : !voice.supported
+          ? "La voz por ahora solo está disponible en la versión web."
+          : "",
+    )
+    setVoiceJoinTarget({ id: ch.id, name: ch.name })
+  }
+
+  const handleJoinVoice = async () => {
+    if (!voiceJoinTarget || !isRealServerId(activeServer) || !voice.supported) return
+    setVoiceJoinBusy(true)
+    setVoiceJoinError("")
+    try {
+      await voice.join({
+        id: voiceJoinTarget.id,
+        name: voiceJoinTarget.name,
+        serverId: activeServer,
+        serverName: activeServerName,
+      })
+      setVoiceJoinTarget(null)
+    } catch (err) {
+      setVoiceJoinError(err instanceof Error ? err.message : friendlyError(err))
+    } finally {
+      setVoiceJoinBusy(false)
+    }
+  }
+
+  // Only the call we are in has a live roster (from LiveKit events); listing
+  // who sits in the other voice channels is HU-20 and needs a backend endpoint.
+  const voiceRosterFor = (channelId: string) =>
+    voice.status === "connected" && voice.channel?.id === channelId ? voice.participants : []
 
   // ---- Channel delete --------------------------------------------------------
 
@@ -1088,10 +1143,13 @@ export default function ChatScreen() {
               </View>
               {cat.channels.map((ch) => {
                 const active = activeChannel === ch.id
+                const inCall = ch.type === "voice" && voice.channel?.id === ch.id && voice.status !== "idle"
+                const roster = voiceRosterFor(ch.id)
                 return (
+                  <View key={ch.id}>
                   <PressableScale
-                    key={ch.id}
-                    onPress={() => setActiveChannel(ch.id)}
+                    onPress={() => handleChannelPress(ch)}
+                    accessibilityLabel={ch.type === "voice" ? `Canal de voz ${ch.name}` : `Canal ${ch.name}`}
                     pressedScale={1}
                     hoverStyle={active ? undefined : { backgroundColor: "rgba(255,255,255,0.05)" }}
                     style={{
@@ -1105,15 +1163,22 @@ export default function ChatScreen() {
                       borderLeftColor: active ? "#37D6C0" : "transparent",
                     }}
                   >
-                    <Text style={{ color: "#8DA8AC", fontWeight: "700", fontSize: 11, opacity: 0.7 }}>
-                      {ch.type === "voice" ? "♪" : "#"}
-                    </Text>
+                    {ch.type === "voice" ? (
+                      <Ionicons
+                        name={inCall ? "volume-high" : "volume-medium-outline"}
+                        size={12}
+                        color={inCall ? "#4FD69C" : "#8DA8AC"}
+                        style={{ opacity: inCall ? 1 : 0.7 }}
+                      />
+                    ) : (
+                      <Text style={{ color: "#8DA8AC", fontWeight: "700", fontSize: 11, opacity: 0.7 }}>#</Text>
+                    )}
                     <Text
                       style={{
                         flex: 1,
                         fontSize: 12,
-                        color: active || ch.unread ? "#E6F3F3" : "#8DA8AC",
-                        fontWeight: active || ch.unread ? "600" : "400",
+                        color: inCall ? "#4FD69C" : active || ch.unread ? "#E6F3F3" : "#8DA8AC",
+                        fontWeight: inCall || active || ch.unread ? "600" : "400",
                       }}
                       numberOfLines={1}
                     >
@@ -1163,33 +1228,84 @@ export default function ChatScreen() {
                       </View>
                     ) : null}
                   </PressableScale>
+                  {roster.map((p) => (
+                    <View
+                      key={p.id}
+                      style={{ flexDirection: "row", alignItems: "center", gap: 7, paddingLeft: 30, paddingRight: 12, paddingVertical: 3 }}
+                    >
+                      <Avatar initials={p.avatar} uri={p.avatarUrl} size={18} />
+                      <Text style={{ flex: 1, color: "#8DA8AC", fontSize: 11.5 }} numberOfLines={1}>
+                        {p.isLocal ? `${p.name} (vos)` : p.name}
+                      </Text>
+                      {!p.micEnabled ? <Ionicons name="mic-off" size={11} color="#FF9E94" /> : null}
+                    </View>
+                  ))}
+                  </View>
                 )
               })}
             </View>
           ))}
         </ScrollView>
 
-        {/* Voice state bar */}
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 8,
-            paddingHorizontal: 12,
-            paddingVertical: 8,
-            borderTopWidth: 1,
-            borderTopColor: "rgba(255,255,255,0.13)",
-            backgroundColor: "rgba(255,255,255,0.15)",
-          }}
-        >
-          <View style={{ width: 8, height: 8, borderRadius: 9999, backgroundColor: "#4FD69C" }} />
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: "#4FD69C", fontWeight: "700", fontSize: 11 }}>Conectado</Text>
-            <Text style={{ color: "#8DA8AC", fontSize: 10 }} numberOfLines={1}>
-              Sala 1 · 3 personas
-            </Text>
+        {voice.dropNotice ? (
+          <View style={{ ...NOTICE_ERROR, marginHorizontal: 10, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Text style={{ flex: 1, color: "#FF9E94", fontSize: 11.5, lineHeight: 16 }}>{voice.dropNotice}</Text>
+            <TouchableOpacity onPress={voice.clearDropNotice} accessibilityLabel="Cerrar aviso" hitSlop={8}>
+              <Ionicons name="close" size={14} color="#FF9E94" />
+            </TouchableOpacity>
           </View>
-        </View>
+        ) : null}
+
+        {/* Voice state bar: only while a call is open or opening (HU-17) */}
+        {voice.status !== "idle" && voice.channel ? (
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              borderTopWidth: 1,
+              borderTopColor: "rgba(255,255,255,0.13)",
+              backgroundColor: "rgba(255,255,255,0.10)",
+            }}
+          >
+            <PressableScale
+              onPress={() => router.push("/(main)/voice")}
+              accessibilityLabel="Abrir canal de voz"
+              pressedScale={0.98}
+              style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}
+            >
+              {voice.status === "connecting" ? (
+                <ActivityIndicator size="small" color="#F0C24B" />
+              ) : (
+                <Ionicons name="cellular" size={14} color="#4FD69C" />
+              )}
+              <View style={{ flex: 1 }}>
+                <Text
+                  style={{
+                    color: voice.status === "connecting" ? "#F0C24B" : "#4FD69C",
+                    fontWeight: "700",
+                    fontSize: 11,
+                  }}
+                >
+                  {voice.status === "connecting" ? "Conectando..." : "Conectado a voz"}
+                </Text>
+                <Text style={{ color: "#8DA8AC", fontSize: 10 }} numberOfLines={1}>
+                  {voice.channel.name} / {voice.channel.serverName}
+                </Text>
+              </View>
+            </PressableScale>
+            <PressableScale
+              onPress={() => voice.leave()}
+              accessibilityLabel="Desconectarse del canal de voz"
+              hoverStyle={{ backgroundColor: "rgba(255,127,114,0.18)" }}
+              style={{ padding: 6, borderRadius: 8 }}
+            >
+              <Ionicons name="call" size={15} color="#FF9E94" style={{ transform: [{ rotate: "135deg" }] }} />
+            </PressableScale>
+          </View>
+        ) : null}
       </View>
 
       {/* Chat main */}
@@ -1862,6 +1978,70 @@ export default function ChatScreen() {
             </View>
           </ScrollView>
         )}
+      </ModalShell>
+
+      {/* Join-voice confirmation (HU-17) */}
+      <ModalShell
+        visible={voiceJoinTarget !== null}
+        onClose={() => {
+          if (!voiceJoinBusy) setVoiceJoinTarget(null)
+        }}
+        title="Unirte al canal de voz"
+      >
+        <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 18 }}>
+          Vas a entrar a{" "}
+          <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>{voiceJoinTarget?.name ?? "este canal"}</Text>
+          {activeServerName ? ` en ${activeServerName}` : ""}. Tu micrófono se va a activar y los demás te
+          van a escuchar.
+          {voice.channel && voice.status !== "idle" && voice.channel.id !== voiceJoinTarget?.id ? (
+            <Text>
+              {" "}Te vas a desconectar de{" "}
+              <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>{voice.channel.name}</Text>.
+            </Text>
+          ) : null}
+        </Text>
+
+        {voiceJoinError ? (
+          <View style={NOTICE_ERROR}>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{voiceJoinError}</Text>
+          </View>
+        ) : null}
+
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <PressableScale
+            onPress={() => setVoiceJoinTarget(null)}
+            disabled={voiceJoinBusy}
+            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
+            style={{
+              flex: 1,
+              borderRadius: 10,
+              paddingVertical: 12,
+              alignItems: "center",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.10)",
+              backgroundColor: "rgba(255,255,255,0.06)",
+            }}
+          >
+            <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
+          </PressableScale>
+          <PressableScale
+            onPress={handleJoinVoice}
+            disabled={voiceJoinBusy || !isRealServerId(activeServer) || !voice.supported}
+            hoverStyle={{ backgroundColor: "#2BC4AF" }}
+            style={{
+              ...PRIMARY_BTN,
+              flex: 1,
+              width: undefined,
+              flexDirection: "row",
+              justifyContent: "center",
+              gap: 8,
+              opacity: voiceJoinBusy || !isRealServerId(activeServer) || !voice.supported ? 0.6 : 1,
+            }}
+          >
+            {voiceJoinBusy ? <ActivityIndicator size="small" color="#04211D" /> : null}
+            <Text style={PRIMARY_TXT}>{voiceJoinBusy ? "Conectando" : "Unirme"}</Text>
+          </PressableScale>
+        </View>
       </ModalShell>
 
       {/* Delete-channel confirmation */}

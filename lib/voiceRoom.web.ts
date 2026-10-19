@@ -3,7 +3,7 @@
 // straight to LiveKit. Only this file knows about the SDK.
 import { DisconnectReason, Room, RoomEvent, Track } from "livekit-client"
 import type { RemoteTrack } from "livekit-client"
-import { MicrophoneError } from "./voiceRoom.types"
+import { MicrophoneError, VoiceAbortedError } from "./voiceRoom.types"
 import type { VoiceRoomEvents, VoiceRoomHandle, VoiceRoomParticipant } from "./voiceRoom.types"
 
 export * from "./voiceRoom.types"
@@ -44,6 +44,16 @@ export async function connectVoiceRoom(
   holder.style.display = "none"
   document.body.appendChild(holder)
 
+  // HU-18 CA1: on leave, stop hearing the others right away instead of relying
+  // on the browser pausing detached <audio> elements.
+  const releaseAudio = () => {
+    holder.querySelectorAll("audio").forEach((el) => {
+      el.pause()
+      el.srcObject = null
+    })
+    holder.remove()
+  }
+
   let closedByUs = false
   const emit = () => events.onParticipants(snapshot(room))
 
@@ -63,7 +73,7 @@ export async function connectVoiceRoom(
     .on(RoomEvent.LocalTrackPublished, emit)
     .on(RoomEvent.LocalTrackUnpublished, emit)
     .on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
-      holder.remove()
+      releaseAudio()
       if (closedByUs || reason === DisconnectReason.CLIENT_INITIATED) return
       const removed =
         reason === DisconnectReason.PARTICIPANT_REMOVED ||
@@ -74,23 +84,45 @@ export async function connectVoiceRoom(
 
   const disconnect = async () => {
     closedByUs = true
+    // Also stops the local mic track, so we stop transmitting (CA1).
     await room.disconnect()
-    holder.remove()
+    releaseAudio()
   }
 
-  try {
-    await room.connect(url, token)
-  } catch (err) {
-    await disconnect()
-    throw err
+  const { signal } = events
+  if (signal?.aborted) {
+    releaseAudio()
+    throw new VoiceAbortedError()
   }
+  // Leaving mid-connect: room.disconnect() makes the pending connect() or
+  // mic publish reject, and the catches below turn that into an abort.
+  const onAbort = () => {
+    disconnect().catch(() => undefined)
+  }
+  signal?.addEventListener("abort", onAbort, { once: true })
 
   try {
-    // CA1: publishing the mic is what makes "su audio empieza a transmitirse".
-    await room.localParticipant.setMicrophoneEnabled(true)
-  } catch (err) {
+    try {
+      await room.connect(url, token)
+    } catch (err) {
+      await disconnect()
+      throw signal?.aborted ? new VoiceAbortedError() : err
+    }
+
+    try {
+      // CA1: publishing the mic is what makes "su audio empieza a transmitirse".
+      await room.localParticipant.setMicrophoneEnabled(true)
+    } catch (err) {
+      await disconnect()
+      throw signal?.aborted ? new VoiceAbortedError() : (toMicrophoneError(err) ?? err)
+    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort)
+  }
+
+  if (signal?.aborted) {
     await disconnect()
-    throw toMicrophoneError(err) ?? err
+    throw new VoiceAbortedError()
   }
 
   // The join started from a click, so autoplay is normally allowed; this

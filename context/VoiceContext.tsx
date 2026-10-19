@@ -43,6 +43,11 @@ interface VoiceState {
   join: (channel: VoiceChannelRef) => Promise<void>
   // HU-18: hangs up, also mid-connect. LiveKit tells the others we left.
   leave: () => Promise<void>
+  // HU-19: whether our own mic is transmitting. Every join starts unmuted
+  // (HU-17 CA1), also when switching channels.
+  micEnabled: boolean
+  // Rejects with a user-facing Spanish message if the mic can't be re-enabled.
+  toggleMic: () => Promise<void>
 }
 
 const DROP_MESSAGES: Record<VoiceDropReason, string> = {
@@ -57,6 +62,15 @@ function joinErrorMessage(err: unknown): string {
       : "No encontramos ningún micrófono. Conectá uno y probá de nuevo."
   }
   return friendlyError(err)
+}
+
+function micErrorMessage(err: unknown): string {
+  if (err instanceof MicrophoneError) {
+    return err.kind === "denied"
+      ? "No tenemos acceso a tu micrófono. Habilitalo en el navegador para volver a hablar."
+      : "No encontramos ningún micrófono. Conectá uno para volver a hablar."
+  }
+  return "No pudimos cambiar el estado de tu micrófono. Probá de nuevo."
 }
 
 const VoiceContext = createContext<VoiceState | null>(null)
@@ -212,6 +226,23 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
 
   const clearDropNotice = useCallback(() => setDropNotice(""), [])
 
+  const micEnabled = roomParticipants.find((p) => p.isLocal)?.micEnabled ?? false
+  // Two fast clicks would otherwise race two setMicrophoneEnabled calls.
+  const micBusyRef = useRef(false)
+
+  const toggleMic = useCallback(async () => {
+    const handle = handleRef.current
+    if (!handle || micBusyRef.current) return
+    micBusyRef.current = true
+    try {
+      await handle.setMicEnabled(!micEnabled)
+    } catch (err) {
+      throw new Error(micErrorMessage(err))
+    } finally {
+      micBusyRef.current = false
+    }
+  }, [micEnabled])
+
   return (
     <VoiceContext.Provider
       value={{
@@ -223,6 +254,8 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         clearDropNotice,
         join,
         leave,
+        micEnabled,
+        toggleMic,
       }}
     >
       {children}

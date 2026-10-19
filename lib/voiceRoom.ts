@@ -1,6 +1,7 @@
 // Native fallback for the voice room (HU-17). Real-time audio on iOS/Android
 // needs @livekit/react-native plus a development build, which the app does not
 // ship yet; Metro picks voiceRoom.web.ts on web, so only native lands here.
+// connectVoiceRoom always throws, so no handle (and no setMicEnabled) exists.
 import type { VoiceRoomEvents, VoiceRoomHandle } from "./voiceRoom.types"
 
 export * from "./voiceRoom.types"

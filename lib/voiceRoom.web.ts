@@ -129,6 +129,18 @@ export async function connectVoiceRoom(
   // covers browsers that still gate playback until an explicit resume.
   room.startAudio().catch(() => undefined)
 
+  // HU-19: muting keeps the track published but stops sending audio (CA1), so
+  // unmuting resumes it right away (CA2).
+  const setMicEnabled = async (enabled: boolean) => {
+    try {
+      await room.localParticipant.setMicrophoneEnabled(enabled)
+    } catch (err) {
+      throw toMicrophoneError(err) ?? err
+    } finally {
+      emit()
+    }
+  }
+
   emit()
-  return { disconnect }
+  return { disconnect, setMicEnabled }
 }

@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Discordia",
-    "slug": "discordia-app",
+    "slug": "discordia-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "discordia",
@@ -22,7 +22,22 @@
     "plugins": [
       "expo-router",
       "expo-font",
-      "expo-asset"
-    ]
+      "expo-asset",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "f459e802-fd86-4063-b49c-201875eea4f4"
+      }
+    },
+    "owner": "rbrunodevs-team"
   }
 }

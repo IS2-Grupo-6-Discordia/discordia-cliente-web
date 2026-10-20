@@ -131,3 +131,11 @@ export interface VoiceJoinResponse {
   url: string
   token: string
 }
+
+// HU-20: one entry of GET /voice/channels/{id}/participants and of the
+// realtime `voice.participants` snapshot. Names come from /auth/users/batch.
+export interface VoicePresenceParticipant {
+  user_id: string
+  microphone_muted: boolean
+  joined_at: string
+}

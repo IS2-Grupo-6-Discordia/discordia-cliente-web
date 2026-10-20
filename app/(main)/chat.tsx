@@ -39,6 +39,8 @@ import type { Server, Category, RoleGroup, Member, ServerMember, Message, Invite
 import { ApiError, friendlyError } from "@/api/client"
 import { useAuth } from "@/context/AuthContext"
 import { useVoice } from "@/context/VoiceContext"
+import type { VoiceParticipant } from "@/context/VoiceContext"
+import { useVoicePresence } from "@/lib/useVoicePresence"
 import { Ionicons } from "@expo/vector-icons"
 import Avatar from "@/components/Avatar"
 import StatusDot, { STATUS_LABELS } from "@/components/StatusDot"
@@ -679,10 +681,19 @@ export default function ChatScreen() {
     }
   }
 
-  // Only the call we are in has a live roster (from LiveKit events); listing
-  // who sits in the other voice channels is HU-20 and needs a backend endpoint.
-  const voiceRosterFor = (channelId: string) =>
-    voice.status === "connected" && voice.channel?.id === channelId ? voice.participants : []
+  // HU-20: who sits in every voice channel of this server, live (CA2). Only
+  // real servers have a backend behind them; mock mode has no voice service.
+  const voiceChannelIds = isRealServerId(activeServer)
+    ? categories.flatMap((c) => c.channels).filter((c) => c.type === "voice" && UUID_RE.test(c.id)).map((c) => c.id)
+    : []
+  const presence = useVoicePresence(voiceChannelIds, !!user && !!process.env.EXPO_PUBLIC_API_URL)
+
+  // The call we are in keeps using LiveKit's own events (instant mute changes,
+  // "(vos)"); every other voice channel shows the presence from the service.
+  const voiceRosterFor = (channelId: string): VoiceParticipant[] => {
+    if (voice.status === "connected" && voice.channel?.id === channelId) return voice.participants
+    return (presence[channelId] ?? []).map((p) => ({ ...p, isLocal: p.id === user?.id }))
+  }
 
   // ---- Channel delete --------------------------------------------------------
 

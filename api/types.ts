@@ -53,6 +53,31 @@ export interface ServerMember {
   joinedAt: string
 }
 
+// HU-25/26: an active ban. Names come from the auth service, like members.
+export interface ServerBan {
+  userId: string
+  name: string
+  avatar: string
+  avatarUrl: string | null
+  bannedBy: string
+  bannedByName: string
+  reason: string | null
+  createdAt: string
+}
+
+// What the current user may do in a server. `permissions` are the backend's
+// lowercase names ("ban_members", ...). Only used to hide actions that would
+// fail: the backend checks every action again.
+export interface MyServerPermissions {
+  isOwner: boolean
+  permissions: string[]
+}
+
+export function hasServerPermission(perms: MyServerPermissions | null, name: string): boolean {
+  if (!perms) return false
+  return perms.isOwner || perms.permissions.includes("administrator") || perms.permissions.includes(name)
+}
+
 export type TransferStatus = "pending" | "accepted" | "rejected" | "cancelled"
 
 // HU-7: an ownership transfer between the current owner (from) and a member (to).

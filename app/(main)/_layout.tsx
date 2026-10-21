@@ -75,9 +75,10 @@ export default function MainLayout() {
             backgroundColor: "#0A1620",
             borderTopColor: "rgba(255,255,255,0.13)",
             borderTopWidth: 1,
-            height: 62,
+            // Room for icon + label: at 62 the labels got clipped on phones.
+            height: 68,
             paddingTop: 6,
-            paddingBottom: 8,
+            paddingBottom: 10,
           },
           tabBarActiveTintColor: "#37D6C0",
           tabBarInactiveTintColor: "#8DA8AC",

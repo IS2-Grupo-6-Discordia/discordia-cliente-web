@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Platform,
   ActivityIndicator,
   Image,
+  useWindowDimensions,
 } from "react-native"
 import type { ViewStyle, TextStyle } from "react-native"
 import * as ImagePicker from "expo-image-picker"
@@ -34,8 +35,24 @@ import {
   getPendingTransfer,
   acceptOwnershipTransfer,
   rejectOwnershipTransfer,
+  getMyServerPermissions,
+  banMember,
+  listBans,
+  unbanMember,
 } from "@/api"
-import type { Server, Category, RoleGroup, Member, ServerMember, Message, Invite, OwnershipTransfer } from "@/api/types"
+import type {
+  Server,
+  Category,
+  RoleGroup,
+  Member,
+  ServerMember,
+  Message,
+  Invite,
+  OwnershipTransfer,
+  ServerBan,
+  MyServerPermissions,
+} from "@/api/types"
+import { hasServerPermission } from "@/api/types"
 import { ApiError, friendlyError } from "@/api/client"
 import { useAuth } from "@/context/AuthContext"
 import { useVoice } from "@/context/VoiceContext"
@@ -46,6 +63,8 @@ import Avatar from "@/components/Avatar"
 import StatusDot, { STATUS_LABELS } from "@/components/StatusDot"
 import ModalShell from "@/components/ModalShell"
 import PressableScale from "@/components/PressableScale"
+import MemberActionsMenu from "@/components/MemberActionsMenu"
+import type { MemberAction } from "@/components/MemberActionsMenu"
 
 const SERVER_NAME_MAX = 100
 
@@ -166,6 +185,10 @@ const NOTICE_OK: ViewStyle = {
 
 const PRESENCE_REFRESH_MS = 15_000
 
+// Below this width (phones) the three columns don't fit: the screen shows one
+// pane at a time (channels or chat) and the member list slides over the content.
+const NARROW_BREAKPOINT = 768
+
 export default function ChatScreen() {
   const router = useRouter()
   const { serverId: requestedServerId } = useLocalSearchParams<{ serverId?: string }>()
@@ -178,6 +201,12 @@ export default function ChatScreen() {
   const [activeChannel, setActiveChannel] = useState("")
   const [showMembers, setShowMembers] = useState(false)
   const [input, setInput] = useState("")
+  const { width: windowWidth } = useWindowDimensions()
+  const isNarrow = windowWidth < NARROW_BREAKPOINT
+  // Phones only: which single pane is on screen.
+  const [mobilePane, setMobilePane] = useState<"channels" | "chat">("channels")
+  // Bigger touch targets on phones for the small inline icon buttons.
+  const iconBtnPad = isNarrow ? 7 : 3
 
   // Web-only hover tooltip for the server rail: shows the full server name next
   // to its icon, so long names stay discoverable even when the icon is just an
@@ -186,7 +215,9 @@ export default function ChatScreen() {
   const [hoveredMember, setHoveredMember] = useState<string | null>(null)
 
   const showTooltip = (label: string) => (e: any) => {
-    if (Platform.OS !== "web") return
+    // Touch screens fire mouseenter on tap but never mouseleave: the tooltip
+    // would stay stuck over the header, so phones don't get it.
+    if (Platform.OS !== "web" || isNarrow) return
     const rect = e?.currentTarget?.getBoundingClientRect?.()
     if (rect) setTooltip({ label, y: rect.top + rect.height / 2 })
   }
@@ -272,6 +303,21 @@ export default function ChatScreen() {
   const [transferActionBusy, setTransferActionBusy] = useState(false)
   const [bannerError, setBannerError] = useState("")
 
+  // Moderation (HU-25 ban / HU-26 revoke). The caller's permissions in the
+  // active server decide which controls show up; the backend checks again.
+  const [myPerms, setMyPerms] = useState<MyServerPermissions | null>(null)
+  const [banTarget, setBanTarget] = useState<{ id: string; name: string } | null>(null)
+  const [banReason, setBanReason] = useState("")
+  const [banBusy, setBanBusy] = useState(false)
+  const [banError, setBanError] = useState("")
+  const [bansOpen, setBansOpen] = useState(false)
+  const [bans, setBans] = useState<ServerBan[]>([])
+  const [bansLoading, setBansLoading] = useState(false)
+  const [bansError, setBansError] = useState("")
+  const [unbanningId, setUnbanningId] = useState<string | null>(null)
+  // Shown when the user loses access to a server (banned, or it disappeared).
+  const [accessLostNotice, setAccessLostNotice] = useState("")
+
   useEffect(() => {
     getServers().then((list) => {
       setServers(list)
@@ -317,7 +363,13 @@ export default function ChatScreen() {
         .then((members) => {
           if (active) setRoles(membersToRoleGroups(members))
         })
-        .catch(() => undefined)
+        .catch((err) => {
+          // HU-25 fallback: a 403/404 here means we lost access (banned, or the
+          // server is gone) and the realtime notice didn't reach us.
+          if (active && err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+            dropServerLocallyRef.current(activeServer, "Ya no tenés acceso a este servidor.")
+          }
+        })
     }, PRESENCE_REFRESH_MS)
     return () => {
       active = false
@@ -353,6 +405,21 @@ export default function ChatScreen() {
     }
   }, [activeServer])
 
+  // HU-25/26: what the caller may do here, to show the moderation controls.
+  useEffect(() => {
+    setMyPerms(null)
+    if (!activeServer || !isRealServerId(activeServer)) return
+    let active = true
+    getMyServerPermissions(activeServer)
+      .then((perms) => {
+        if (active) setMyPerms(perms)
+      })
+      .catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [activeServer])
+
   const channel = categories.flatMap((c) => c.channels).find((c) => c.id === activeChannel)
 
   // Owner of the active server (derived): only the owner may initiate a transfer.
@@ -367,6 +434,38 @@ export default function ChatScreen() {
   // only on real servers, and never the owner's own row.
   const canOfferTransferTo = (memberId: string) =>
     isOwner && isRealServerId(activeServer) && memberId !== user?.id
+
+  // HU-25/26: moderators see "Banear" on other members' rows and the bans list.
+  // Never on yourself or the owner. The role hierarchy (CA2) is only enforced by
+  // the backend, which answers 403 with a clear message.
+  const canBan = isRealServerId(activeServer) && hasServerPermission(myPerms, "ban_members")
+  const canBanMember = (memberId: string) =>
+    canBan &&
+    memberId !== user?.id &&
+    servers.find((s) => s.id === activeServer)?.ownerId !== memberId
+
+  // Options of a member row's "⋮" menu. Role changes will go here too.
+  const memberActions = (memberId: string, memberName: string): MemberAction[] => {
+    const actions: MemberAction[] = []
+    if (canOfferTransferTo(memberId)) {
+      actions.push({
+        key: "transfer",
+        label: "Transferir propiedad",
+        icon: "swap-horizontal-outline",
+        onPress: () => openTransferForMember(memberId, memberName),
+      })
+    }
+    if (canBanMember(memberId)) {
+      actions.push({
+        key: "ban",
+        label: "Banear",
+        icon: "ban-outline",
+        tone: "danger",
+        onPress: () => openBanModal(memberId, memberName),
+      })
+    }
+    return actions
+  }
 
   // The recipient sees an actionable banner (accept/reject); the sender sees an
   // informational one while the transfer stays pending.
@@ -436,6 +535,19 @@ export default function ChatScreen() {
       setTransferActionBusy(false)
     }
   }
+
+  // Forget a server we no longer belong to (left it, or lost access: HU-25).
+  // HU-18: without membership we can't stay in its voice channels either.
+  const dropServerLocally = async (serverId: string, notice?: string) => {
+    if (voice.channel?.serverId === serverId) await voice.leave()
+    const remaining = servers.filter((s) => s.id !== serverId)
+    setServers((prev) => prev.filter((s) => s.id !== serverId))
+    setActiveServer((current) => (current === serverId ? (remaining[0]?.id ?? "") : current))
+    if (notice) setAccessLostNotice(notice)
+  }
+  // The members poll effect outlives renders: read the latest version.
+  const dropServerLocallyRef = useRef(dropServerLocally)
+  dropServerLocallyRef.current = dropServerLocally
 
   const handleSend = async () => {
     if (!input.trim()) return
@@ -645,6 +757,7 @@ export default function ChatScreen() {
   const handleChannelPress = (ch: { id: string; name: string; type: "text" | "voice" }) => {
     if (ch.type === "text") {
       setActiveChannel(ch.id)
+      if (isNarrow) setMobilePane("chat")
       return
     }
     if (voice.channel?.id === ch.id && voice.status === "connected") {
@@ -686,7 +799,14 @@ export default function ChatScreen() {
   const voiceChannelIds = isRealServerId(activeServer)
     ? categories.flatMap((c) => c.channels).filter((c) => c.type === "voice" && UUID_RE.test(c.id)).map((c) => c.id)
     : []
-  const presence = useVoicePresence(voiceChannelIds, !!user && !!process.env.EXPO_PUBLIC_API_URL)
+  const presence = useVoicePresence(
+    voiceChannelIds,
+    !!user && !!process.env.EXPO_PUBLIC_API_URL,
+    (serverId) => {
+      const name = servers.find((s) => s.id === serverId)?.name
+      dropServerLocally(serverId, name ? `Fuiste baneado de ${name}.` : "Fuiste baneado de un servidor.")
+    },
+  )
 
   // The call we are in keeps using LiveKit's own events (instant mute changes,
   // "(vos)"); every other voice channel shows the presence from the service.
@@ -892,18 +1012,68 @@ export default function ChatScreen() {
     setLeaveBusy(true)
     try {
       await leaveServer(activeServer)
-      // HU-18: without membership we can't stay in its voice channels.
-      if (voice.channel?.serverId === activeServer) await voice.leave()
-      const remaining = servers.filter((s) => s.id !== activeServer)
-      setServers((prev) => prev.filter((s) => s.id !== activeServer))
-      if (remaining.length > 0) {
-        setActiveServer(remaining[0].id)
-      }
+      await dropServerLocally(activeServer)
       setLeaveOpen(false)
     } catch (err) {
       setLeaveError(friendlyError(err))
     } finally {
       setLeaveBusy(false)
+    }
+  }
+
+  // ---- Moderation: ban (HU-25) / revoke (HU-26) ------------------------------
+
+  const openBanModal = (memberId: string, memberName: string) => {
+    setBanTarget({ id: memberId, name: memberName })
+    setBanReason("")
+    setBanError("")
+  }
+
+  const handleBan = async () => {
+    if (!banTarget) return
+    setBanBusy(true)
+    setBanError("")
+    try {
+      await banMember(activeServer, banTarget.id, banReason)
+      setBanTarget(null)
+      const members = await getServerMembers(activeServer)
+      setRoles(membersToRoleGroups(members))
+    } catch (err) {
+      setBanError(friendlyError(err))
+    } finally {
+      setBanBusy(false)
+    }
+  }
+
+  const refreshBans = async (serverId: string) => {
+    setBansLoading(true)
+    setBansError("")
+    try {
+      setBans(await listBans(serverId))
+    } catch (err) {
+      setBansError(friendlyError(err))
+      setBans([])
+    } finally {
+      setBansLoading(false)
+    }
+  }
+
+  const openBansModal = () => {
+    setBans([])
+    setBansOpen(true)
+    refreshBans(activeServer)
+  }
+
+  const handleUnban = async (userId: string) => {
+    setBansError("")
+    setUnbanningId(userId)
+    try {
+      await unbanMember(activeServer, userId)
+      setBans((prev) => prev.filter((b) => b.userId !== userId))
+    } catch (err) {
+      setBansError(friendlyError(err))
+    } finally {
+      setUnbanningId(null)
     }
   }
 
@@ -946,6 +1116,7 @@ export default function ChatScreen() {
       {/* Server rail */}
       <View
         style={{
+          display: isNarrow && mobilePane !== "channels" ? "none" : "flex",
           alignItems: "center",
           paddingTop: 8,
           paddingBottom: 8,
@@ -1084,10 +1255,11 @@ export default function ChatScreen() {
         </View>
       ) : null}
 
-      {/* Channel sidebar */}
+      {/* Channel sidebar (the whole "channels" pane on phones) */}
       <View
         style={{
-          width: 180,
+          display: isNarrow && mobilePane !== "channels" ? "none" : "flex",
+          ...(isNarrow ? { flex: 1 } : { width: 180 }),
           backgroundColor: "rgba(255,255,255,0.055)",
           borderRightWidth: 1,
           borderRightColor: "rgba(255,255,255,0.13)",
@@ -1101,7 +1273,7 @@ export default function ChatScreen() {
           <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }} numberOfLines={2}>
             {servers.find((s) => s.id === activeServer)?.name ?? ""}
           </Text>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
             <PressableScale
               onPress={handleGenerateInvite}
               hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
@@ -1135,6 +1307,27 @@ export default function ChatScreen() {
               <Ionicons name="exit-outline" size={13} color="#8DA8AC" />
               <Text style={{ color: "#8DA8AC", fontSize: 11.5, fontWeight: "600" }}>Salir</Text>
             </PressableScale>
+            {canBan ? (
+              <PressableScale
+                onPress={openBansModal}
+                accessibilityLabel="Ver miembros baneados"
+                hoverStyle={{ backgroundColor: "rgba(255,127,114,0.30)" }}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 5,
+                  paddingHorizontal: 10,
+                  paddingVertical: 5,
+                  borderRadius: 8,
+                  backgroundColor: "rgba(255,127,114,0.18)",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,127,114,0.55)",
+                }}
+              >
+                <Ionicons name="ban-outline" size={13} color="#FF7F72" />
+                <Text style={{ color: "#FF7F72", fontSize: 11.5, fontWeight: "700" }}>Miembros baneados</Text>
+              </PressableScale>
+            ) : null}
           </View>
         </View>
 
@@ -1150,7 +1343,7 @@ export default function ChatScreen() {
                     onPress={openCreateChannel}
                     accessibilityLabel="Crear canal"
                     hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
-                    style={{ padding: 3, borderRadius: 6 }}
+                    style={{ padding: iconBtnPad, borderRadius: 6 }}
                   >
                     <Ionicons name="add" size={14} color="#8DA8AC" />
                   </PressableScale>
@@ -1172,7 +1365,7 @@ export default function ChatScreen() {
                       alignItems: "center",
                       gap: 6,
                       paddingHorizontal: 12,
-                      paddingVertical: 6,
+                      paddingVertical: isNarrow ? 11 : 6,
                       backgroundColor: active ? "rgba(55,214,192,0.15)" : "transparent",
                       borderLeftWidth: 2,
                       borderLeftColor: active ? "#37D6C0" : "transparent",
@@ -1205,7 +1398,7 @@ export default function ChatScreen() {
                           onPress={() => handleMoveChannel(ch.id, "up")}
                           accessibilityLabel={`Mover canal ${ch.name} arriba`}
                           hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
-                          style={{ padding: 3, borderRadius: 6 }}
+                          style={{ padding: iconBtnPad, borderRadius: 6 }}
                         >
                           <Ionicons name="chevron-up" size={11} color="#8DA8AC" />
                         </PressableScale>
@@ -1213,7 +1406,7 @@ export default function ChatScreen() {
                           onPress={() => handleMoveChannel(ch.id, "down")}
                           accessibilityLabel={`Mover canal ${ch.name} abajo`}
                           hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
-                          style={{ padding: 3, borderRadius: 6 }}
+                          style={{ padding: iconBtnPad, borderRadius: 6 }}
                         >
                           <Ionicons name="chevron-down" size={11} color="#8DA8AC" />
                         </PressableScale>
@@ -1221,7 +1414,7 @@ export default function ChatScreen() {
                           onPress={() => openEditChannel(ch)}
                           accessibilityLabel={`Editar canal ${ch.name}`}
                           hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
-                          style={{ padding: 3, borderRadius: 6 }}
+                          style={{ padding: iconBtnPad, borderRadius: 6 }}
                         >
                           <Ionicons name="pencil-outline" size={11} color="#8DA8AC" />
                         </PressableScale>
@@ -1229,7 +1422,7 @@ export default function ChatScreen() {
                           onPress={() => openDeleteChannel(ch)}
                           accessibilityLabel={`Eliminar canal ${ch.name}`}
                           hoverStyle={{ backgroundColor: "rgba(255,127,114,0.14)" }}
-                          style={{ padding: 3, borderRadius: 6 }}
+                          style={{ padding: iconBtnPad, borderRadius: 6 }}
                         >
                           <Ionicons name="trash-outline" size={11} color="#FF9E94" />
                         </PressableScale>
@@ -1246,7 +1439,7 @@ export default function ChatScreen() {
                   {roster.map((p) => (
                     <View
                       key={p.id}
-                      style={{ flexDirection: "row", alignItems: "center", gap: 7, paddingLeft: 30, paddingRight: 12, paddingVertical: 3 }}
+                      style={{ flexDirection: "row", alignItems: "center", gap: 7, paddingLeft: 30, paddingRight: 12, paddingVertical: isNarrow ? 5 : 3 }}
                     >
                       <Avatar initials={p.avatar} uri={p.avatarUrl} size={18} />
                       <Text style={{ flex: 1, color: "#8DA8AC", fontSize: 11.5 }} numberOfLines={1}>
@@ -1315,7 +1508,7 @@ export default function ChatScreen() {
               onPress={() => voice.leave()}
               accessibilityLabel="Desconectarse del canal de voz"
               hoverStyle={{ backgroundColor: "rgba(255,127,114,0.18)" }}
-              style={{ padding: 6, borderRadius: 8 }}
+              style={{ padding: isNarrow ? 10 : 6, borderRadius: 8 }}
             >
               <Ionicons name="call" size={15} color="#FF9E94" style={{ transform: [{ rotate: "135deg" }] }} />
             </PressableScale>
@@ -1323,13 +1516,23 @@ export default function ChatScreen() {
         ) : null}
       </View>
 
-      {/* Chat main */}
-      <View style={{ flex: 1 }}>
+      {/* Chat main (the "chat" pane on phones) */}
+      <View style={{ flex: 1, display: isNarrow && mobilePane !== "chat" ? "none" : "flex" }}>
         {/* Channel header */}
         <View
-          style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.13)" }}
+          style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: isNarrow ? 10 : 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.13)" }}
         >
-          <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 13.5 }}>
+          {isNarrow ? (
+            <TouchableOpacity
+              onPress={() => setMobilePane("channels")}
+              accessibilityLabel="Volver a los canales"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{ padding: 4 }}
+            >
+              <Ionicons name="chevron-back" size={20} color="#E6F3F3" />
+            </TouchableOpacity>
+          ) : null}
+          <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 13.5, flexShrink: 1 }} numberOfLines={1}>
             {channel ? `# ${channel.name}` : "Discordia"}
           </Text>
           <Text style={{ color: "#8DA8AC", flex: 1, marginLeft: 8, fontSize: 11 }} numberOfLines={1}>
@@ -1585,15 +1788,38 @@ export default function ChatScreen() {
         </View>
       </View>
 
-      {/* Members panel */}
+      {/* Members panel: a column on wide screens, a sheet over the content on
+          phones (tap outside to close). */}
+      {showMembers && isNarrow ? (
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setShowMembers(false)}
+          accessibilityLabel="Cerrar miembros"
+          style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, backgroundColor: "rgba(3,10,14,0.6)", zIndex: 30 }}
+        />
+      ) : null}
       {showMembers && (
         <View
-          style={{
-            width: 216,
-            backgroundColor: "rgba(255,255,255,0.03)",
-            borderLeftWidth: 1,
-            borderLeftColor: "rgba(255,255,255,0.10)",
-          }}
+          style={
+            isNarrow
+              ? {
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  right: 0,
+                  width: Math.min(300, windowWidth - 48),
+                  zIndex: 31,
+                  backgroundColor: "#0E1C26",
+                  borderLeftWidth: 1,
+                  borderLeftColor: "rgba(255,255,255,0.10)",
+                }
+              : {
+                  width: 216,
+                  backgroundColor: "rgba(255,255,255,0.03)",
+                  borderLeftWidth: 1,
+                  borderLeftColor: "rgba(255,255,255,0.10)",
+                }
+          }
         >
           {/* Panel header */}
           <View
@@ -1667,7 +1893,7 @@ export default function ChatScreen() {
                           alignItems: "center",
                           gap: 9,
                           paddingHorizontal: 6,
-                          paddingVertical: 5,
+                          paddingVertical: isNarrow ? 9 : 5,
                           borderRadius: 8,
                           backgroundColor: hovered ? "rgba(255,255,255,0.05)" : "transparent",
                           opacity: m.status === "offline" ? 0.55 : 1,
@@ -1685,29 +1911,14 @@ export default function ChatScreen() {
                             {STATUS_LABELS[m.status]}
                           </Text>
                         </View>
-                        {/* HU-7: owner-only per-member action to hand over ownership.
-                            A separate touchable that stops the press from bubbling to
-                            the row's tap-to-open-profile navigation. */}
-                        {canOfferTransferTo(m.id) ? (
-                          <TouchableOpacity
-                            onPress={(e) => {
-                              e.stopPropagation()
-                              openTransferForMember(m.id, m.name)
-                            }}
-                            accessibilityLabel={`Transferir propiedad a ${m.name}`}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            style={{
-                              width: 26,
-                              height: 26,
-                              borderRadius: 8,
-                              alignItems: "center",
-                              justifyContent: "center",
-                              backgroundColor: "rgba(55,214,192,0.10)",
-                            }}
-                          >
-                            <Ionicons name="swap-horizontal-outline" size={14} color="#37D6C0" />
-                          </TouchableOpacity>
-                        ) : null}
+                        {/* Per-member actions (HU-7 transfer, HU-25 ban) behind a
+                            "⋮" menu; it stops the press from opening the profile. */}
+                        {(() => {
+                          const actions = memberActions(m.id, m.name)
+                          return actions.length > 0 ? (
+                            <MemberActionsMenu memberName={m.name} actions={actions} />
+                          ) : null
+                        })()}
                       </TouchableOpacity>
                     )
                   })}
@@ -2358,6 +2569,157 @@ export default function ChatScreen() {
           ) : (
             <Text style={PRIMARY_TXT}>Transferir</Text>
           )}
+        </PressableScale>
+      </ModalShell>
+
+      {/* Ban confirmation (HU-25) */}
+      <ModalShell
+        visible={!!banTarget}
+        onClose={() => setBanTarget(null)}
+        title="Banear miembro"
+        subtitle="No va a poder volver a unirse con ninguna invitación hasta que se revoque el baneo."
+      >
+        <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 16 }}>
+          ¿Seguro que querés banear a{" "}
+          <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>{banTarget?.name ?? ""}</Text> de{" "}
+          <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>{activeServerName || "este servidor"}</Text>?
+        </Text>
+
+        {banError ? (
+          <View style={NOTICE_ERROR}>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{banError}</Text>
+          </View>
+        ) : null}
+
+        <Text style={LABEL}>Motivo (opcional)</Text>
+        <TextInput
+          value={banReason}
+          onChangeText={setBanReason}
+          placeholder="Por ejemplo: spam"
+          placeholderTextColor="#5E7E82"
+          maxLength={500}
+          style={[FIELD, { marginBottom: 18 }]}
+        />
+
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <PressableScale
+            onPress={() => setBanTarget(null)}
+            disabled={banBusy}
+            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
+            style={{
+              flex: 1,
+              borderRadius: 10,
+              paddingVertical: 12,
+              alignItems: "center",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.10)",
+              backgroundColor: "rgba(255,255,255,0.06)",
+            }}
+          >
+            <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
+          </PressableScale>
+          <PressableScale
+            onPress={handleBan}
+            disabled={banBusy}
+            style={{
+              flex: 1,
+              borderRadius: 10,
+              paddingVertical: 12,
+              alignItems: "center",
+              backgroundColor: "#FF7F72",
+              opacity: banBusy ? 0.7 : 1,
+            }}
+          >
+            {banBusy ? (
+              <ActivityIndicator color="#04211D" />
+            ) : (
+              <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>Banear</Text>
+            )}
+          </PressableScale>
+        </View>
+      </ModalShell>
+
+      {/* Bans list with revoke (HU-26) */}
+      <ModalShell
+        visible={bansOpen}
+        onClose={() => setBansOpen(false)}
+        title="Miembros baneados"
+        subtitle={`Usuarios baneados de ${activeServerName || "este servidor"}. Al revocar, pueden volver a unirse con una invitación.`}
+      >
+        {bansError ? (
+          <View style={NOTICE_ERROR}>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{bansError}</Text>
+          </View>
+        ) : null}
+
+        {bansLoading ? (
+          <ActivityIndicator color="#37D6C0" style={{ marginVertical: 18 }} />
+        ) : bans.length === 0 && !bansError ? (
+          <Text style={{ color: "#8DA8AC", fontSize: 12.5, textAlign: "center", marginVertical: 18 }}>
+            No hay usuarios baneados.
+          </Text>
+        ) : (
+          <ScrollView style={{ maxHeight: 320 }} contentContainerStyle={{ gap: 8 }}>
+            {bans.map((ban) => (
+              <View
+                key={ban.userId}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: 10,
+                  borderRadius: 10,
+                  backgroundColor: "rgba(255,255,255,0.04)",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,255,255,0.08)",
+                }}
+              >
+                <Avatar initials={ban.avatar} size={28} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 13 }} numberOfLines={1}>
+                    {ban.name}
+                  </Text>
+                  <Text style={{ color: "#8DA8AC", fontSize: 11 }} numberOfLines={2}>
+                    {ban.reason ? `${ban.reason} · ` : ""}por {ban.bannedByName} ·{" "}
+                    {new Date(ban.createdAt).toLocaleDateString()}
+                  </Text>
+                </View>
+                <PressableScale
+                  onPress={() => handleUnban(ban.userId)}
+                  disabled={unbanningId === ban.userId}
+                  accessibilityLabel={`Revocar baneo de ${ban.name}`}
+                  hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
+                  style={{
+                    paddingHorizontal: 10,
+                    paddingVertical: 6,
+                    borderRadius: 8,
+                    backgroundColor: "rgba(55,214,192,0.12)",
+                    opacity: unbanningId === ban.userId ? 0.6 : 1,
+                  }}
+                >
+                  {unbanningId === ban.userId ? (
+                    <ActivityIndicator size="small" color="#37D6C0" />
+                  ) : (
+                    <Text style={{ color: "#37D6C0", fontSize: 11.5, fontWeight: "700" }}>Revocar</Text>
+                  )}
+                </PressableScale>
+              </View>
+            ))}
+          </ScrollView>
+        )}
+      </ModalShell>
+
+      {/* Lost access to a server (HU-25: banned) */}
+      <ModalShell
+        visible={!!accessLostNotice}
+        onClose={() => setAccessLostNotice("")}
+        title="Perdiste el acceso"
+      >
+        <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 18 }}>
+          {accessLostNotice}
+        </Text>
+        <PressableScale onPress={() => setAccessLostNotice("")} style={PRIMARY_BTN}>
+          <Text style={PRIMARY_TXT}>Entendido</Text>
         </PressableScale>
       </ModalShell>
     </View>

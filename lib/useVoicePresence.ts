@@ -20,12 +20,22 @@ export interface PresenceParticipant {
 
 const POLL_INTERVAL_MS = 10000
 
-export function useVoicePresence(channelIds: string[], enabled: boolean): Record<string, PresenceParticipant[]> {
+// `onAccessRevoked` fires when the voice service says the user lost access to a
+// server (HU-25: banned). Its channels were already dropped server-side; the
+// socket stays open for the user's other servers.
+export function useVoicePresence(
+  channelIds: string[],
+  enabled: boolean,
+  onAccessRevoked?: (serverId: string) => void,
+): Record<string, PresenceParticipant[]> {
   const [byChannel, setByChannel] = useState<Record<string, VoicePresenceParticipant[]>>({})
   const [profiles, setProfiles] = useState<Record<string, { name: string; avatarUrl?: string | null }>>({})
   const [status, setStatus] = useState<RealtimeStatus>("closed")
   const connRef = useRef<RealtimeConnection | null>(null)
   const requestedRef = useRef(new Set<string>())
+  // Kept in a ref so a new callback each render doesn't reopen the socket.
+  const onAccessRevokedRef = useRef(onAccessRevoked)
+  onAccessRevokedRef.current = onAccessRevoked
 
   // Stable key so a new array with the same ids doesn't resubscribe.
   const key = [...channelIds].sort().join(",")
@@ -38,6 +48,10 @@ export function useVoicePresence(channelIds: string[], enabled: boolean): Record
       getTicket: getVoiceRealtimeTicket,
       onStatus: setStatus,
       onMessage: (msg: RealtimeMessage) => {
+        if (msg.type === "voice.access_revoked") {
+          if (typeof msg.server_id === "string") onAccessRevokedRef.current?.(msg.server_id)
+          return
+        }
         if (msg.type !== "voice.participants") {
           if (msg.type === "error") console.warn("[voice presence]", msg)
           return

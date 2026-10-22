@@ -27,6 +27,7 @@ import {
   revokeInvite,
   joinServer,
   leaveServer,
+  deleteServer,
   deleteChannel,
   updateChannel,
   reorderChannels,
@@ -35,8 +36,14 @@ import {
   getPendingTransfer,
   acceptOwnershipTransfer,
   rejectOwnershipTransfer,
+  updateServerBanner,
+  getServerRoles,
+  getDefaultRoleId,
+  deleteRole,
+  getMemberPermissions,
+  ADMIN_PERMISSION,
 } from "@/api"
-import type { Server, Category, RoleGroup, Member, ServerMember, Message, Invite, OwnershipTransfer } from "@/api/types"
+import type { Server, Category, RoleGroup, ServerRole, Member, ServerMember, Message, Invite, OwnershipTransfer } from "@/api/types"
 import { ApiError, friendlyError } from "@/api/client"
 import { useAuth } from "@/context/AuthContext"
 import { Ionicons } from "@expo/vector-icons"
@@ -44,6 +51,9 @@ import Avatar from "@/components/Avatar"
 import StatusDot, { STATUS_LABELS } from "@/components/StatusDot"
 import ModalShell from "@/components/ModalShell"
 import PressableScale from "@/components/PressableScale"
+import DeleteServerModal from "@/components/DeleteServerModal"
+import ServerSettingsModal from "@/components/ServerSettingsModal"
+import RolesModal from "@/components/RolesModal"
 
 const SERVER_NAME_MAX = 100
 
@@ -254,6 +264,28 @@ export default function ChatScreen() {
   const [leaveBusy, setLeaveBusy] = useState(false)
   const [leaveError, setLeaveError] = useState("")
 
+  const [deleteSrvOpen, setDeleteSrvOpen] = useState(false)
+  const [deleteSrvBusy, setDeleteSrvBusy] = useState(false)
+  const [deleteSrvError, setDeleteSrvError] = useState("")
+
+  // Server settings (HU-4 / #95), banner-only for now. Admin-gated.
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsBusy, setSettingsBusy] = useState(false)
+  const [settingsError, setSettingsError] = useState("")
+
+  // Role manager (HU-5 / #92). Admin-gated.
+  const [rolesOpen, setRolesOpen] = useState(false)
+  const [rolesList, setRolesList] = useState<ServerRole[]>([])
+  const [rolesLoading, setRolesLoading] = useState(false)
+  const [rolesError, setRolesError] = useState("")
+  const [roleBusyId, setRoleBusyId] = useState("")
+  const [defaultRoleId, setDefaultRoleId] = useState<string | null>(null)
+
+  // Admin permissions the current user holds in the active server, flattened
+  // from the backend's own role permissions (HU-4/HU-5 gating). Empty when the
+  // user isn't an admin or it couldn't be confirmed -> falls back to owner-only.
+  const [memberPermissions, setMemberPermissions] = useState<string[]>([])
+
   // Ownership transfer (HU-7)
   // Owner-initiated transfer modal.
   const [transferOpen, setTransferOpen] = useState(false)
@@ -334,6 +366,26 @@ export default function ChatScreen() {
       .catch(() => setMessages([]))
   }, [activeChannel])
 
+  // HU-4/HU-5 gating: load the current user's admin permissions for the active
+  // real server, so the banner config and role manager can be surfaced to
+  // admins (not just the owner). Clears on server change; on any failure it
+  // stays empty, so the UI falls back to owner-only gating.
+  useEffect(() => {
+    setMemberPermissions([])
+    if (!activeServer || !isRealServerId(activeServer) || !user?.id) return
+    let active = true
+    getMemberPermissions(activeServer, user.id)
+      .then((perms) => {
+        if (active) setMemberPermissions(perms)
+      })
+      .catch(() => {
+        if (active) setMemberPermissions([])
+      })
+    return () => {
+      active = false
+    }
+  }, [activeServer, user?.id])
+
   // HU-7: when a real server becomes active, check for a pending ownership
   // transfer relevant to the caller. The recipient of a pending transfer sees a
   // banner; everyone else (and mock servers) sees nothing.
@@ -363,6 +415,16 @@ export default function ChatScreen() {
     !!activeServer && servers.find((s) => s.id === activeServer)?.ownerId === user?.id
 
   const activeServerName = servers.find((s) => s.id === activeServer)?.name ?? ""
+  const activeServerBannerUrl = servers.find((s) => s.id === activeServer)?.bannerUrl ?? null
+
+  // Admin of the active server: the owner always qualifies; a non-owner member
+  // qualifies when the backend grants them the `administrator` permission. Gates
+  // the banner config (CA2 of #95) and the role manager (CA2 of #92). Falls back
+  // to owner-only when permissions couldn't be confirmed.
+  const canAdministrate =
+    !!activeServer &&
+    isRealServerId(activeServer) &&
+    (isOwner || memberPermissions.includes(ADMIN_PERMISSION))
 
   // Whether the owner may offer ownership to a given member row: only the owner,
   // only on real servers, and never the owner's own row.
@@ -435,6 +497,103 @@ export default function ChatScreen() {
       setBannerError(friendlyError(err))
     } finally {
       setTransferActionBusy(false)
+    }
+  }
+
+  const openDeleteServer = () => {
+    setDeleteSrvError("")
+    setDeleteSrvOpen(true)
+  }
+
+  const handleDeleteServer = async (confirmationName: string) => {
+    setDeleteSrvBusy(true)
+    setDeleteSrvError("")
+    try {
+      await deleteServer(activeServer, confirmationName)
+      const remaining = servers.filter((s) => s.id !== activeServer)
+      setServers(remaining)
+      setActiveServer(remaining[0]?.id ?? "")
+      setDeleteSrvOpen(false)
+    } catch (err) {
+      setDeleteSrvError(friendlyError(err))
+    } finally {
+      setDeleteSrvBusy(false)
+    }
+  }
+
+  // HU-4 (#95): open the server settings (banner) modal.
+  const openSettings = () => {
+    setSettingsError("")
+    setSettingsOpen(true)
+  }
+
+  const handleSaveBanner = async (
+    banner: Blob | { uri: string; name: string; type: string },
+  ) => {
+    setSettingsBusy(true)
+    setSettingsError("")
+    try {
+      const updated = await updateServerBanner(activeServer, banner)
+      // Reflect the new banner for everyone in the rail-backed server list (CA1).
+      setServers((prev) => prev.map((s) => (s.id === updated.id ? { ...s, bannerUrl: updated.bannerUrl } : s)))
+      setSettingsOpen(false)
+    } catch (err) {
+      // 422 = unsupported format/size; the backend persisted nothing (CA3).
+      if (err instanceof ApiError && err.status === 422) {
+        setSettingsError("Ese archivo no sirve como banner. Probá con otra imagen (formato o tamaño no soportado).")
+      } else if (err instanceof ApiError && err.status === 503) {
+        setSettingsError("El almacenamiento de imágenes no está disponible ahora. Probá de nuevo en un rato.")
+      } else {
+        setSettingsError(friendlyError(err))
+      }
+    } finally {
+      setSettingsBusy(false)
+    }
+  }
+
+  // HU-5 (#92): open the role manager and load the real role list plus the
+  // default role (so its deletion can be blocked, matching the backend's 409).
+  const openRoles = async () => {
+    setRolesOpen(true)
+    setRolesError("")
+    setRoleBusyId("")
+    if (!isRealServerId(activeServer)) {
+      setRolesList([])
+      return
+    }
+    setRolesLoading(true)
+    try {
+      const [list, defaultId] = await Promise.all([
+        getServerRoles(activeServer),
+        getDefaultRoleId(activeServer),
+      ])
+      setRolesList(list)
+      setDefaultRoleId(defaultId)
+    } catch (err) {
+      setRolesError(friendlyError(err))
+      setRolesList([])
+    } finally {
+      setRolesLoading(false)
+    }
+  }
+
+  const handleDeleteRole = async (role: ServerRole) => {
+    setRoleBusyId(role.id)
+    setRolesError("")
+    try {
+      await deleteRole(activeServer, role.id)
+      // CA1: the role is gone -> drop it from the list so its members' perms
+      // visibly refresh. The backend already revoked it from every member.
+      setRolesList((prev) => prev.filter((r) => r.id !== role.id))
+    } catch (err) {
+      // CA2: 403 without admin permission. 409: default/own-admin role.
+      if (err instanceof ApiError && err.status === 409) {
+        setRolesError("Ese rol no se puede eliminar: es el rol por defecto o un rol de administración que tenés asignado.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+    } finally {
+      setRoleBusyId("")
     }
   }
 
@@ -1051,19 +1210,30 @@ export default function ChatScreen() {
         <View
           style={{ paddingHorizontal: 12, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.13)" }}
         >
+          {/* HU-4 (#95): the server banner, shown to every member once set. */}
+          {activeServerBannerUrl ? (
+            <Image
+              source={{ uri: activeServerBannerUrl }}
+              style={{ width: "100%", height: 72, borderRadius: 8 }}
+              resizeMode="cover"
+            />
+          ) : null}
           <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }} numberOfLines={2}>
             {servers.find((s) => s.id === activeServer)?.name ?? ""}
           </Text>
+          {/* Primary actions — available to every member. Invitar grows to
+              anchor the row; Salir keeps its natural width beside it. */}
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <PressableScale
               onPress={handleGenerateInvite}
               hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
               style={{
+                flex: 1,
                 flexDirection: "row",
                 alignItems: "center",
+                justifyContent: "center",
                 gap: 5,
-                paddingHorizontal: 10,
-                paddingVertical: 5,
+                paddingVertical: 6,
                 borderRadius: 8,
                 backgroundColor: "rgba(55,214,192,0.12)",
               }}
@@ -1078,9 +1248,10 @@ export default function ChatScreen() {
               style={{
                 flexDirection: "row",
                 alignItems: "center",
+                justifyContent: "center",
                 gap: 5,
-                paddingHorizontal: 10,
-                paddingVertical: 5,
+                paddingHorizontal: 12,
+                paddingVertical: 6,
                 borderRadius: 8,
                 backgroundColor: "rgba(255,255,255,0.05)",
               }}
@@ -1089,6 +1260,65 @@ export default function ChatScreen() {
               <Text style={{ color: "#8DA8AC", fontSize: 11.5, fontWeight: "600" }}>Salir</Text>
             </PressableScale>
           </View>
+          {/* Admin tools — banner config (#95), roles (#92), delete server
+              (#97). Rendered as a separate row of uniform square icon buttons
+              so they never overflow the sidebar, and only when the member can
+              see at least one of them, so the row is never empty. */}
+          {canAdministrate || (isOwner && isRealServerId(activeServer)) ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              {canAdministrate ? (
+                <PressableScale
+                  onPress={openSettings}
+                  accessibilityLabel="Configuración del servidor"
+                  hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
+                  style={{
+                    width: 34,
+                    height: 30,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(255,255,255,0.05)",
+                  }}
+                >
+                  <Ionicons name="settings-outline" size={15} color="#8DA8AC" />
+                </PressableScale>
+              ) : null}
+              {canAdministrate ? (
+                <PressableScale
+                  onPress={openRoles}
+                  accessibilityLabel="Roles del servidor"
+                  hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
+                  style={{
+                    width: 34,
+                    height: 30,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(255,255,255,0.05)",
+                  }}
+                >
+                  <Ionicons name="shield-outline" size={15} color="#8DA8AC" />
+                </PressableScale>
+              ) : null}
+              {isOwner && isRealServerId(activeServer) ? (
+                <PressableScale
+                  onPress={openDeleteServer}
+                  accessibilityLabel="Eliminar servidor"
+                  hoverStyle={{ backgroundColor: "rgba(255,127,114,0.22)" }}
+                  style={{
+                    width: 34,
+                    height: 30,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(255,127,114,0.12)",
+                  }}
+                >
+                  <Ionicons name="trash-outline" size={15} color="#FF7F72" />
+                </PressableScale>
+              ) : null}
+            </View>
+          ) : null}
         </View>
 
         <ScrollView style={{ flex: 1 }}>
@@ -2172,6 +2402,39 @@ export default function ChatScreen() {
           </PressableScale>
         </View>
       </ModalShell>
+
+      {/* Delete-server confirmation (HU-6 / #97) */}
+      <DeleteServerModal
+        visible={deleteSrvOpen}
+        serverName={activeServerName}
+        busy={deleteSrvBusy}
+        error={deleteSrvError}
+        onClose={() => setDeleteSrvOpen(false)}
+        onConfirm={handleDeleteServer}
+      />
+
+      {/* HU-4 (#95): server settings — banner */}
+      <ServerSettingsModal
+        visible={settingsOpen}
+        serverName={activeServerName}
+        currentBannerUrl={activeServerBannerUrl}
+        busy={settingsBusy}
+        error={settingsError}
+        onClose={() => setSettingsOpen(false)}
+        onSave={handleSaveBanner}
+      />
+
+      {/* HU-5 (#92): role manager */}
+      <RolesModal
+        visible={rolesOpen}
+        roles={rolesList}
+        defaultRoleId={defaultRoleId}
+        loading={rolesLoading}
+        error={rolesError}
+        busyRoleId={roleBusyId}
+        onClose={() => setRolesOpen(false)}
+        onDelete={handleDeleteRole}
+      />
 
       {/* Transfer ownership (HU-7) */}
       <ModalShell

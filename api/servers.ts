@@ -1,7 +1,12 @@
 import { File as NativeFile } from "expo-file-system"
 import { getUsersBatch } from "./auth"
 import { api, apiUpload, ApiError } from "./client"
-import type { Server, Category, RoleGroup, Invite, ServerMember, OwnershipTransfer } from "./types"
+import type { Server, Category, RoleGroup, ServerRole, Invite, ServerMember, OwnershipTransfer } from "./types"
+
+// The backend's admin permission string, surfaced in each RoleOut.permissions[].
+// The UI reads it to decide whether to show admin-only actions (banner config,
+// role management); it is the backend's own vocabulary, not invented here.
+export const ADMIN_PERMISSION = "administrator"
 
 // Reads always stay mocked: the backend does NOT expose GET /servers,
 // GET categories, or GET roles endpoints yet, so there is nothing to call.
@@ -165,6 +170,7 @@ interface BackendServerSummary {
   id: string
   name: string
   icon_url: string | null
+  banner_url: string | null
   owner_id: string
   created_at: string
 }
@@ -211,6 +217,7 @@ function toServer(backend: BackendServerSummary): Server {
     abbr: abbrFor(backend.name),
     color: colorFor(backend.id),
     iconUrl: backend.icon_url ?? null,
+    bannerUrl: backend.banner_url ?? null,
     ownerId: backend.owner_id,
   }
 }
@@ -344,6 +351,53 @@ export async function leaveServer(serverId: string): Promise<void> {
   }
 
   await api<void>("/servers/" + serverId + "/members/me", { method: "DELETE" })
+}
+
+export async function deleteServer(serverId: string, confirmationName: string): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+
+  await api<void>("/servers/" + serverId, {
+    method: "DELETE",
+    body: JSON.stringify({ confirmation_name: confirmationName }),
+  })
+}
+
+// HU-4 (#95): edit a server's banner. Admin-only — the backend answers 403 when
+// the caller lacks admin permissions (CA2), and 422 when the image's format or
+// size is unsupported, saving nothing in that case (CA3). Sent as a multipart
+// PATCH with a single `banner` file field, mirroring how createServer uploads
+// the icon. Returns the updated server so the new banner shows for everyone once
+// it persists (CA1). `banner` is a web Blob or a native file descriptor.
+export async function updateServerBanner(
+  serverId: string,
+  banner: Blob | { uri: string; name: string; type: string },
+): Promise<Server> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    const existing = MOCK_SERVERS.find((s) => s.id === serverId)
+    const name = existing?.name ?? "Servidor"
+    return {
+      id: serverId,
+      name,
+      abbr: abbrFor(name),
+      color: colorFor(serverId),
+      iconUrl: existing?.iconUrl ?? null,
+      bannerUrl:
+        typeof URL !== "undefined" && banner instanceof Blob ? URL.createObjectURL(banner) : null,
+    }
+  }
+
+  const fd = new FormData()
+  if (banner instanceof Blob) {
+    fd.append("banner", banner, "banner")
+  } else {
+    fd.append("banner", new NativeFile(banner.uri) as any)
+  }
+  const res = await apiUpload<BackendServerSummary>("/servers/" + serverId, fd, "PATCH")
+  return toServer(res)
 }
 
 // Optional preview of an invite before joining (HU-3 optional).
@@ -582,4 +636,91 @@ export async function rejectOwnershipTransfer(
     { method: "POST" },
   )
   return toOwnershipTransfer(res)
+}
+
+// ---- HU-5 (#92): roles -------------------------------------------------------
+
+// A real role as returned by the roles endpoints (RoleOut).
+interface BackendRole {
+  id: string
+  server_id: string
+  name: string
+  permissions: string[]
+  position: number
+  created_at: string
+}
+
+function toServerRole(backend: BackendRole): ServerRole {
+  return {
+    id: backend.id,
+    serverId: backend.server_id,
+    name: backend.name,
+    permissions: backend.permissions,
+    position: backend.position,
+  }
+}
+
+// The server's real role list (GET /servers/{id}/roles). Distinct from getRoles,
+// which returns the member roster grouped for the sidebar; this feeds the role
+// manager. Ordered by the backend's `position`.
+export async function getServerRoles(serverId: string): Promise<ServerRole[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(400)
+    return []
+  }
+  const res = await api<BackendRole[]>(`/servers/${serverId}/roles`)
+  return res.map(toServerRole)
+}
+
+// The id of the server's default role (the one assigned to new members), or null
+// when none is set. The UI uses it to block deletion of that role, which the
+// backend rejects with 409 (a default role can't be deleted).
+export async function getDefaultRoleId(serverId: string): Promise<string | null> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(300)
+    return null
+  }
+  const res = await api<{ server_id: string; role: BackendRole | null }>(
+    `/servers/${serverId}/default-role`,
+  )
+  return res.role?.id ?? null
+}
+
+// HU-5 (#92): permanently delete a role. Admin-only — the backend answers 403
+// when the caller lacks admin permissions (CA2), and 409 when the role is the
+// server's default role or an `administrator` role the caller holds. On success
+// (204) the members that had the role lose its permissions (CA1).
+export async function deleteRole(serverId: string, roleId: string): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+  await api<void>(`/servers/${serverId}/roles/${roleId}`, { method: "DELETE" })
+}
+
+// The permission strings the current user holds in a server, flattened across
+// all their roles (GET /servers/{id}/members/{id}/roles → MemberRolesOut). Lets
+// the UI surface admin-only actions without inventing any permission logic: it
+// reads the backend's own `permissions` arrays. Returns [] on any failure, so a
+// caller that can't confirm admin simply falls back to owner-only gating.
+export async function getMemberPermissions(
+  serverId: string,
+  userId: string,
+): Promise<string[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(300)
+    return []
+  }
+  try {
+    const res = await api<{ user_id: string; roles: BackendRole[] }>(
+      `/servers/${serverId}/members/${userId}/roles`,
+    )
+    const permissions = new Set<string>()
+    for (const role of res.roles) {
+      for (const permission of role.permissions) permissions.add(permission)
+    }
+    return Array.from(permissions)
+  } catch {
+    return []
+  }
 }

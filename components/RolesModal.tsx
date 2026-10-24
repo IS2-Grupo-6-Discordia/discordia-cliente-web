@@ -14,10 +14,18 @@ interface RolesModalProps {
   loading?: boolean
   error?: string
   busyRoleId?: string
+  // HU-4: the role whose "Marcar como por defecto" action is mid-request.
+  defaultBusyId?: string
+  // HU-4: whether the current user can manage roles. Reuses the parent's
+  // `canAdministrate` memo so the set-default action never invents its own check.
+  canAdministrate?: boolean
   createBusy?: boolean
   updateBusy?: boolean
   onClose: () => void
   onDelete: (role: ServerRole) => void
+  // HU-4: set this role as the server's default role for new members. Mirrors
+  // onDelete — a row action the parent owns; the parent updates defaultRoleId.
+  onSetDefault: (role: ServerRole) => void
   // HU-1: create a role from the given name. Resolves true on success so the
   // input can clear/close; false (validation/403/409/422) leaves it as-is.
   onCreate: (name: string) => Promise<boolean>
@@ -53,10 +61,13 @@ export default function RolesModal({
   loading = false,
   error = "",
   busyRoleId = "",
+  defaultBusyId = "",
+  canAdministrate = false,
   createBusy = false,
   updateBusy = false,
   onClose,
   onDelete,
+  onSetDefault,
   onCreate,
   onUpdatePermissions,
 }: RolesModalProps) {
@@ -231,6 +242,38 @@ export default function RolesModal({
                       </Text>
                     </View>
                   </PressableScale>
+                  {/* HU-4: the default role shows a "Por defecto" badge; every
+                      other role gets a "Marcar como por defecto" action, shown
+                      only to someone who can manage roles (same canAdministrate
+                      condition the parent uses to open this modal). */}
+                  {role.id === defaultRoleId ? (
+                    <View style={DEFAULT_BADGE}>
+                      <Ionicons name="star" size={11} color="#37D6C0" />
+                      <Text style={DEFAULT_BADGE_TXT}>Por defecto</Text>
+                    </View>
+                  ) : canAdministrate ? (
+                    <PressableScale
+                      onPress={() => onSetDefault(role)}
+                      disabled={defaultBusyId === role.id}
+                      accessibilityLabel={`Marcar el rol ${role.name} como rol por defecto`}
+                      hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
+                      style={{
+                        width: 34,
+                        height: 34,
+                        borderRadius: 8,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        backgroundColor: "rgba(55,214,192,0.12)",
+                        opacity: defaultBusyId === role.id ? 0.6 : 1,
+                      }}
+                    >
+                      {defaultBusyId === role.id ? (
+                        <ActivityIndicator color="#37D6C0" size="small" />
+                      ) : (
+                        <Ionicons name="star-outline" size={16} color="#37D6C0" />
+                      )}
+                    </PressableScale>
+                  ) : null}
                   <PressableScale
                     onPress={() => onDelete(role)}
                     disabled={reason !== "" || busy}
@@ -365,6 +408,20 @@ const SECONDARY_BTN: ViewStyle = {
   alignItems: "center",
   justifyContent: "center",
   backgroundColor: "rgba(255,255,255,0.05)",
+}
+const DEFAULT_BADGE: ViewStyle = {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 4,
+  paddingHorizontal: 9,
+  height: 34,
+  borderRadius: 8,
+  backgroundColor: "rgba(55,214,192,0.12)",
+}
+const DEFAULT_BADGE_TXT: TextStyle = {
+  color: "#37D6C0",
+  fontSize: 11.5,
+  fontWeight: "700",
 }
 const CREATE_BTN: ViewStyle = {
   flexDirection: "row",

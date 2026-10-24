@@ -39,6 +39,7 @@ import {
   updateServerBanner,
   getServerRoles,
   getDefaultRoleId,
+  setDefaultRole,
   deleteRole,
   createRole,
   updateRolePermissions,
@@ -288,6 +289,8 @@ export default function ChatScreen() {
   const [roleCreateBusy, setRoleCreateBusy] = useState(false)
   const [roleUpdateBusy, setRoleUpdateBusy] = useState(false)
   const [defaultRoleId, setDefaultRoleId] = useState<string | null>(null)
+  // HU-4: the role whose "Marcar como por defecto" request is in flight.
+  const [roleDefaultBusyId, setRoleDefaultBusyId] = useState("")
 
   // HU-3: per-member role assignment selector. Admin-gated (same condition as
   // the role manager). `memberRolesList` is every server role; `memberAssignedIds`
@@ -613,6 +616,31 @@ export default function ChatScreen() {
       }
     } finally {
       setRoleBusyId("")
+    }
+  }
+
+  // HU-4 (#95): set a role as the server's default role for new members.
+  // Mirrors the other role handlers' in-place state update: on success the local
+  // defaultRoleId is replaced (no reload), so the "Por defecto" mark and the
+  // delete-disable move to the new role and the previous role becomes deletable
+  // again (unless it's an admin role — RolesModal keeps that guard). On error
+  // defaultRoleId is never touched, so the mark stays on the previous role.
+  const handleSetDefaultRole = async (role: ServerRole) => {
+    setRoleDefaultBusyId(role.id)
+    setRolesError("")
+    try {
+      const newDefaultId = await setDefaultRole(activeServer, role.id)
+      setDefaultRoleId(newDefaultId)
+    } catch (err) {
+      // 403: missing MANAGE_ROLES/ADMINISTRATOR, or setting a role whose
+      // permissions the caller doesn't hold themselves.
+      if (err instanceof ApiError && err.status === 403) {
+        setRolesError("No tenés permisos para definir este rol como rol por defecto.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+    } finally {
+      setRoleDefaultBusyId("")
     }
   }
 
@@ -2605,10 +2633,13 @@ export default function ChatScreen() {
         loading={rolesLoading}
         error={rolesError}
         busyRoleId={roleBusyId}
+        defaultBusyId={roleDefaultBusyId}
+        canAdministrate={canAdministrate}
         createBusy={roleCreateBusy}
         updateBusy={roleUpdateBusy}
         onClose={() => setRolesOpen(false)}
         onDelete={handleDeleteRole}
+        onSetDefault={handleSetDefaultRole}
         onCreate={handleCreateRole}
         onUpdatePermissions={handleUpdateRolePermissions}
       />

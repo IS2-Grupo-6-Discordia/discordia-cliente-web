@@ -686,6 +686,27 @@ export async function getDefaultRoleId(serverId: string): Promise<string | null>
   return res.role?.id ?? null
 }
 
+// HU-4 (#95): set the server's default role (the one new members auto-receive).
+// Admin-only — the backend answers 403 when the caller lacks
+// MANAGE_ROLES/ADMINISTRATOR, or tries to set a role whose permissions they
+// don't hold themselves. Sent as PUT with a single `role_id` field, and the
+// response mirrors GET /default-role (`{ server_id, role }`), so the new default
+// role id is read back the same way getDefaultRoleId reads it.
+export async function setDefaultRole(serverId: string, roleId: string): Promise<string | null> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return roleId
+  }
+  const res = await api<{ server_id: string; role: BackendRole | null }>(
+    `/servers/${serverId}/default-role`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ role_id: roleId }),
+    },
+  )
+  return res.role?.id ?? roleId
+}
+
 // HU-5 (#92): permanently delete a role. Admin-only — the backend answers 403
 // when the caller lacks admin permissions (CA2), and 409 when the role is the
 // server's default role or an `administrator` role the caller holds. On success

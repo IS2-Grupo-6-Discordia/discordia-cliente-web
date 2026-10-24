@@ -40,6 +40,7 @@ import {
   getServerRoles,
   getDefaultRoleId,
   deleteRole,
+  createRole,
   getMemberPermissions,
   ADMIN_PERMISSION,
 } from "@/api"
@@ -279,6 +280,7 @@ export default function ChatScreen() {
   const [rolesLoading, setRolesLoading] = useState(false)
   const [rolesError, setRolesError] = useState("")
   const [roleBusyId, setRoleBusyId] = useState("")
+  const [roleCreateBusy, setRoleCreateBusy] = useState(false)
   const [defaultRoleId, setDefaultRoleId] = useState<string | null>(null)
 
   // Admin permissions the current user holds in the active server, flattened
@@ -594,6 +596,40 @@ export default function ChatScreen() {
       }
     } finally {
       setRoleBusyId("")
+    }
+  }
+
+  // HU-1: create a role. The backend assigns default permissions + position, so
+  // we only send the name. Returns true on success so the modal can clear its
+  // input. Mirrors handleDeleteRole's state update: on success the new role is
+  // appended to the END of the list, no screen reload.
+  const handleCreateRole = async (name: string): Promise<boolean> => {
+    const trimmed = name.trim()
+    setRolesError("")
+    // Frontend validation before calling the API: non-empty, at most 100 chars.
+    if (trimmed === "" || trimmed.length > 100) {
+      setRolesError("El nombre del rol no es válido.")
+      return false
+    }
+    setRoleCreateBusy(true)
+    try {
+      const created = await createRole(activeServer, trimmed)
+      setRolesList((prev) => [...prev, created])
+      return true
+    } catch (err) {
+      // CA2: 403 without permission. 409: duplicate name. 422: invalid name.
+      if (err instanceof ApiError && err.status === 403) {
+        setRolesError("No tenés permisos para crear roles en este servidor.")
+      } else if (err instanceof ApiError && err.status === 409) {
+        setRolesError("Ya existe un rol con ese nombre.")
+      } else if (err instanceof ApiError && err.status === 422) {
+        setRolesError("El nombre del rol no es válido.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+      return false
+    } finally {
+      setRoleCreateBusy(false)
     }
   }
 
@@ -2432,8 +2468,10 @@ export default function ChatScreen() {
         loading={rolesLoading}
         error={rolesError}
         busyRoleId={roleBusyId}
+        createBusy={roleCreateBusy}
         onClose={() => setRolesOpen(false)}
         onDelete={handleDeleteRole}
+        onCreate={handleCreateRole}
       />
 
       {/* Transfer ownership (HU-7) */}

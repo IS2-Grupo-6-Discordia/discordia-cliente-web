@@ -698,6 +698,25 @@ export async function deleteRole(serverId: string, roleId: string): Promise<void
   await api<void>(`/servers/${serverId}/roles/${roleId}`, { method: "DELETE" })
 }
 
+// HU-1: create a role in a server. Admin-only — the backend assigns the default
+// permissions and position, so the frontend only sends the name. The backend
+// answers 403 when the caller lacks MANAGE_ROLES/ADMINISTRATOR (CA2), 409 when a
+// role with that name already exists, and 422 when the name is empty or longer
+// than 100 chars. On success (201) it returns the created role (same RoleOut
+// shape as the roles listed by getServerRoles).
+export async function createRole(serverId: string, name: string): Promise<ServerRole> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    const id = "role-" + Math.random().toString(36).slice(2, 10)
+    return { id, serverId, name, permissions: [], position: 0 }
+  }
+  const res = await api<BackendRole>(`/servers/${serverId}/roles`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  })
+  return toServerRole(res)
+}
+
 // The permission strings the current user holds in a server, flattened across
 // all their roles (GET /servers/{id}/members/{id}/roles → MemberRolesOut). Lets
 // the UI surface admin-only actions without inventing any permission logic: it

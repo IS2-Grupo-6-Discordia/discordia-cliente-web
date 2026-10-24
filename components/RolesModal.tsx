@@ -15,12 +15,31 @@ interface RolesModalProps {
   error?: string
   busyRoleId?: string
   createBusy?: boolean
+  updateBusy?: boolean
   onClose: () => void
   onDelete: (role: ServerRole) => void
   // HU-1: create a role from the given name. Resolves true on success so the
   // input can clear/close; false (validation/403/409/422) leaves it as-is.
   onCreate: (name: string) => Promise<boolean>
+  // HU-2: replace a role's permission mask with the COMPLETE desired list.
+  // Resolves true on success so the editor can collapse; false (403/409/422)
+  // keeps it open and the caller reverts the toggles to the role's state.
+  onUpdatePermissions: (role: ServerRole, permissions: string[]) => Promise<boolean>
 }
+
+// HU-2: the backend's permission vocabulary (lowercase) paired with the Spanish
+// label each toggle shows. Order is fixed so the editor always reads the same.
+const PERMISSION_OPTIONS: { key: string; label: string }[] = [
+  { key: "administrator", label: "Administrador" },
+  { key: "manage_server", label: "Gestionar servidor" },
+  { key: "manage_roles", label: "Gestionar roles" },
+  { key: "manage_channels", label: "Gestionar canales" },
+  { key: "create_invite", label: "Crear invitaciones" },
+  { key: "kick_members", label: "Expulsar miembros" },
+  { key: "ban_members", label: "Banear miembros" },
+  { key: "send_messages", label: "Enviar mensajes" },
+  { key: "connect_voice", label: "Conectarse a voz" },
+]
 
 // HU-5 (#92): role manager — lists a server's roles and lets an admin delete
 // one. The parent gates visibility to admins (CA2) and owns the list + the API
@@ -35,19 +54,28 @@ export default function RolesModal({
   error = "",
   busyRoleId = "",
   createBusy = false,
+  updateBusy = false,
   onClose,
   onDelete,
   onCreate,
+  onUpdatePermissions,
 }: RolesModalProps) {
   // HU-1: inline "Crear rol" input. `creating` toggles the field; `newRoleName`
   // holds its draft. Reset whenever the modal is closed so it reopens clean.
   const [creating, setCreating] = useState(false)
   const [newRoleName, setNewRoleName] = useState("")
 
+  // HU-2: permission editor. `editingId` is the role whose toggles are open (one
+  // at a time); `draftPerms` is the working copy the toggles mutate until saved.
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [draftPerms, setDraftPerms] = useState<string[]>([])
+
   useEffect(() => {
     if (!visible) {
       setCreating(false)
       setNewRoleName("")
+      setEditingId(null)
+      setDraftPerms([])
     }
   }, [visible])
 
@@ -63,6 +91,36 @@ export default function RolesModal({
     if (ok) {
       setNewRoleName("")
       setCreating(false)
+    }
+  }
+
+  // HU-2: open a role's permission editor, seeding the draft from its current
+  // permissions so toggling starts from the role's real state.
+  const openEditor = (role: ServerRole) => {
+    setEditingId(role.id)
+    setDraftPerms([...role.permissions])
+  }
+
+  // Cancel discards the draft and collapses the editor without calling the API.
+  const cancelEditor = () => {
+    setEditingId(null)
+    setDraftPerms([])
+  }
+
+  const togglePerm = (key: string) => {
+    setDraftPerms((prev) => (prev.includes(key) ? prev.filter((p) => p !== key) : [...prev, key]))
+  }
+
+  // Save sends the COMPLETE checked list. On success the editor collapses; on any
+  // error the toggles revert to the role's state before editing (the parent has
+  // surfaced the reason via `error`).
+  const handleSavePerms = async (role: ServerRole) => {
+    const ok = await onUpdatePermissions(role, draftPerms)
+    if (ok) {
+      setEditingId(null)
+      setDraftPerms([])
+    } else {
+      setDraftPerms([...role.permissions])
     }
   }
 
@@ -145,39 +203,106 @@ export default function RolesModal({
           {roles.map((role) => {
             const reason = blockedReason(role)
             const busy = busyRoleId === role.id
+            const editing = editingId === role.id
             return (
-              <View key={role.id} style={ROW}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: "#E6F3F3", fontSize: 14, fontWeight: "600" }} numberOfLines={1}>
-                    {role.name}
-                  </Text>
-                  <Text style={{ color: "#8DA8AC", fontSize: 11, marginTop: 2 }}>
-                    {reason
-                      ? reason
-                      : `${role.permissions.length} ${role.permissions.length === 1 ? "permiso" : "permisos"}`}
-                  </Text>
+              <View key={role.id} style={ROW_WRAP}>
+                <View style={ROW}>
+                  {/* Tapping the role opens/closes its permission editor (HU-2). */}
+                  <PressableScale
+                    onPress={() => (editing ? cancelEditor() : openEditor(role))}
+                    pressedScale={1}
+                    accessibilityLabel={`Editar permisos del rol ${role.name}`}
+                    hoverStyle={{ backgroundColor: "rgba(255,255,255,0.04)" }}
+                    style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}
+                  >
+                    <Ionicons
+                      name={editing ? "chevron-down" : "chevron-forward"}
+                      size={14}
+                      color="#5E7E82"
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: "#E6F3F3", fontSize: 14, fontWeight: "600" }} numberOfLines={1}>
+                        {role.name}
+                      </Text>
+                      <Text style={{ color: "#8DA8AC", fontSize: 11, marginTop: 2 }}>
+                        {reason
+                          ? reason
+                          : `${role.permissions.length} ${role.permissions.length === 1 ? "permiso" : "permisos"}`}
+                      </Text>
+                    </View>
+                  </PressableScale>
+                  <PressableScale
+                    onPress={() => onDelete(role)}
+                    disabled={reason !== "" || busy}
+                    accessibilityLabel={`Eliminar rol ${role.name}`}
+                    hoverStyle={reason ? undefined : { backgroundColor: "rgba(255,127,114,0.22)" }}
+                    style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: 8,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: "rgba(255,127,114,0.12)",
+                      opacity: reason !== "" ? 0.35 : 1,
+                    }}
+                  >
+                    {busy ? (
+                      <ActivityIndicator color="#FF7F72" size="small" />
+                    ) : (
+                      <Ionicons name="trash-outline" size={16} color="#FF7F72" />
+                    )}
+                  </PressableScale>
                 </View>
-                <PressableScale
-                  onPress={() => onDelete(role)}
-                  disabled={reason !== "" || busy}
-                  accessibilityLabel={`Eliminar rol ${role.name}`}
-                  hoverStyle={reason ? undefined : { backgroundColor: "rgba(255,127,114,0.22)" }}
-                  style={{
-                    width: 34,
-                    height: 34,
-                    borderRadius: 8,
-                    alignItems: "center",
-                    justifyContent: "center",
-                    backgroundColor: "rgba(255,127,114,0.12)",
-                    opacity: reason !== "" ? 0.35 : 1,
-                  }}
-                >
-                  {busy ? (
-                    <ActivityIndicator color="#FF7F72" size="small" />
-                  ) : (
-                    <Ionicons name="trash-outline" size={16} color="#FF7F72" />
-                  )}
-                </PressableScale>
+
+                {/* HU-2: permission toggles for the open role, Spanish-labelled. */}
+                {editing ? (
+                  <View style={{ paddingBottom: 12, gap: 2 }}>
+                    {PERMISSION_OPTIONS.map((perm) => {
+                      const checked = draftPerms.includes(perm.key)
+                      return (
+                        <PressableScale
+                          key={perm.key}
+                          onPress={() => togglePerm(perm.key)}
+                          disabled={updateBusy}
+                          pressedScale={1}
+                          accessibilityLabel={`${checked ? "Quitar" : "Agregar"} permiso ${perm.label}`}
+                          hoverStyle={{ backgroundColor: "rgba(255,255,255,0.04)" }}
+                          style={PERM_ROW}
+                        >
+                          <Ionicons
+                            name={checked ? "checkbox" : "square-outline"}
+                            size={18}
+                            color={checked ? "#37D6C0" : "#5E7E82"}
+                          />
+                          <Text style={{ color: "#E6F3F3", fontSize: 13 }}>{perm.label}</Text>
+                        </PressableScale>
+                      )
+                    })}
+                    <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
+                      <PressableScale
+                        onPress={() => handleSavePerms(role)}
+                        disabled={updateBusy}
+                        accessibilityLabel="Guardar permisos"
+                        style={{ ...PRIMARY_BTN, opacity: updateBusy ? 0.6 : 1 }}
+                      >
+                        {updateBusy ? (
+                          <ActivityIndicator color="#04211D" size="small" />
+                        ) : (
+                          <Text style={PRIMARY_TXT}>Guardar</Text>
+                        )}
+                      </PressableScale>
+                      <PressableScale
+                        onPress={cancelEditor}
+                        disabled={updateBusy}
+                        accessibilityLabel="Cancelar edición de permisos"
+                        hoverStyle={{ backgroundColor: "rgba(255,255,255,0.08)" }}
+                        style={SECONDARY_BTN}
+                      >
+                        <Text style={{ color: "#8DA8AC", fontSize: 14, fontWeight: "600" }}>Cancelar</Text>
+                      </PressableScale>
+                    </View>
+                  </View>
+                ) : null}
               </View>
             )
           })}
@@ -187,13 +312,23 @@ export default function RolesModal({
   )
 }
 
+const ROW_WRAP: ViewStyle = {
+  borderBottomWidth: 1,
+  borderBottomColor: "rgba(255,255,255,0.08)",
+}
 const ROW: ViewStyle = {
   flexDirection: "row",
   alignItems: "center",
   gap: 10,
   paddingVertical: 10,
-  borderBottomWidth: 1,
-  borderBottomColor: "rgba(255,255,255,0.08)",
+}
+const PERM_ROW: ViewStyle = {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 10,
+  paddingVertical: 8,
+  paddingHorizontal: 4,
+  borderRadius: 8,
 }
 const NOTICE_ERROR: ViewStyle = {
   paddingHorizontal: 12,

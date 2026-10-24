@@ -41,6 +41,7 @@ import {
   getDefaultRoleId,
   deleteRole,
   createRole,
+  updateRolePermissions,
   getMemberPermissions,
   ADMIN_PERMISSION,
 } from "@/api"
@@ -281,6 +282,7 @@ export default function ChatScreen() {
   const [rolesError, setRolesError] = useState("")
   const [roleBusyId, setRoleBusyId] = useState("")
   const [roleCreateBusy, setRoleCreateBusy] = useState(false)
+  const [roleUpdateBusy, setRoleUpdateBusy] = useState(false)
   const [defaultRoleId, setDefaultRoleId] = useState<string | null>(null)
 
   // Admin permissions the current user holds in the active server, flattened
@@ -630,6 +632,40 @@ export default function ChatScreen() {
       return false
     } finally {
       setRoleCreateBusy(false)
+    }
+  }
+
+  // HU-2: edit a role's permissions. Sends the COMPLETE desired list (the backend
+  // replaces the whole mask). Returns true on success so the modal can collapse
+  // the editor; false (403/409/422) keeps it open and the modal reverts its
+  // toggles. Mirrors handleCreateRole/handleDeleteRole's in-place state update:
+  // on 200 the updated role replaces the old one by id, so the "N permisos"
+  // counter refreshes without a screen reload.
+  const handleUpdateRolePermissions = async (
+    role: ServerRole,
+    permissions: string[],
+  ): Promise<boolean> => {
+    setRoleUpdateBusy(true)
+    setRolesError("")
+    try {
+      const updated = await updateRolePermissions(activeServer, role.id, permissions)
+      setRolesList((prev) => prev.map((r) => (r.id === updated.id ? updated : r)))
+      return true
+    } catch (err) {
+      // CA3: 403 without permission or granting/removing a perm you lack.
+      // CA2: 409 removing administrator from your own role. 422: invalid perm.
+      if (err instanceof ApiError && err.status === 403) {
+        setRolesError("No tenés permisos para modificar este rol o alguno de sus permisos.")
+      } else if (err instanceof ApiError && err.status === 409) {
+        setRolesError("No podés quitarle el permiso de administración a tu propio rol.")
+      } else if (err instanceof ApiError && err.status === 422) {
+        setRolesError("Alguno de los permisos no es válido.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+      return false
+    } finally {
+      setRoleUpdateBusy(false)
     }
   }
 
@@ -2469,9 +2505,11 @@ export default function ChatScreen() {
         error={rolesError}
         busyRoleId={roleBusyId}
         createBusy={roleCreateBusy}
+        updateBusy={roleUpdateBusy}
         onClose={() => setRolesOpen(false)}
         onDelete={handleDeleteRole}
         onCreate={handleCreateRole}
+        onUpdatePermissions={handleUpdateRolePermissions}
       />
 
       {/* Transfer ownership (HU-7) */}

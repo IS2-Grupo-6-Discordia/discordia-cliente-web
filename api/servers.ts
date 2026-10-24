@@ -717,6 +717,29 @@ export async function createRole(serverId: string, name: string): Promise<Server
   return toServerRole(res)
 }
 
+// HU-2: edit a role's permissions. Admin-only. The backend REPLACES the whole
+// permission mask, so the COMPLETE desired list is always sent (an empty array
+// clears every permission). It answers 403 when the caller lacks
+// MANAGE_ROLES/ADMINISTRATOR or tries to grant/remove a permission they don't
+// hold themselves (CA3), 409 when removing `administrator` from the caller's own
+// role (CA2; the owner is exempt), and 422 when a permission name is invalid. On
+// success (200) it returns the updated role (same RoleOut shape as getServerRoles).
+export async function updateRolePermissions(
+  serverId: string,
+  roleId: string,
+  permissions: string[],
+): Promise<ServerRole> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return { id: roleId, serverId, name: "Rol", permissions, position: 0 }
+  }
+  const res = await api<BackendRole>(`/servers/${serverId}/roles/${roleId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ permissions }),
+  })
+  return toServerRole(res)
+}
+
 // The permission strings the current user holds in a server, flattened across
 // all their roles (GET /servers/{id}/members/{id}/roles → MemberRolesOut). Lets
 // the UI surface admin-only actions without inventing any permission logic: it

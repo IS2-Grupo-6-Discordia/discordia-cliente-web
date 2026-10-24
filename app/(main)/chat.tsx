@@ -43,6 +43,9 @@ import {
   createRole,
   updateRolePermissions,
   getMemberPermissions,
+  getMemberRoles,
+  assignRoleToMember,
+  removeRoleFromMember,
   ADMIN_PERMISSION,
 } from "@/api"
 import type { Server, Category, RoleGroup, ServerRole, Member, ServerMember, Message, Invite, OwnershipTransfer } from "@/api/types"
@@ -56,6 +59,7 @@ import PressableScale from "@/components/PressableScale"
 import DeleteServerModal from "@/components/DeleteServerModal"
 import ServerSettingsModal from "@/components/ServerSettingsModal"
 import RolesModal from "@/components/RolesModal"
+import MemberRolesModal from "@/components/MemberRolesModal"
 
 const SERVER_NAME_MAX = 100
 
@@ -284,6 +288,17 @@ export default function ChatScreen() {
   const [roleCreateBusy, setRoleCreateBusy] = useState(false)
   const [roleUpdateBusy, setRoleUpdateBusy] = useState(false)
   const [defaultRoleId, setDefaultRoleId] = useState<string | null>(null)
+
+  // HU-3: per-member role assignment selector. Admin-gated (same condition as
+  // the role manager). `memberRolesList` is every server role; `memberAssignedIds`
+  // is the loaded set of ids the target member already has (pre-checked).
+  const [memberRolesOpen, setMemberRolesOpen] = useState(false)
+  const [memberRolesTarget, setMemberRolesTarget] = useState<{ id: string; name: string } | null>(null)
+  const [memberRolesList, setMemberRolesList] = useState<ServerRole[]>([])
+  const [memberAssignedIds, setMemberAssignedIds] = useState<string[]>([])
+  const [memberRolesLoading, setMemberRolesLoading] = useState(false)
+  const [memberRolesError, setMemberRolesError] = useState("")
+  const [memberRoleBusyId, setMemberRoleBusyId] = useState("")
 
   // Admin permissions the current user holds in the active server, flattened
   // from the backend's own role permissions (HU-4/HU-5 gating). Empty when the
@@ -666,6 +681,67 @@ export default function ChatScreen() {
       return false
     } finally {
       setRoleUpdateBusy(false)
+    }
+  }
+
+  // HU-3: open the per-member role selector. Loads every server role plus the
+  // member's current roles (so the boxes pre-check), mirroring openRoles. Mock
+  // servers have no real roles, so the selector opens empty.
+  const openMemberRoles = async (memberId: string, memberName: string) => {
+    setMemberRolesOpen(true)
+    setMemberRolesTarget({ id: memberId, name: memberName })
+    setMemberRolesError("")
+    setMemberRoleBusyId("")
+    setMemberRolesList([])
+    setMemberAssignedIds([])
+    if (!isRealServerId(activeServer)) return
+    setMemberRolesLoading(true)
+    try {
+      const [all, assigned] = await Promise.all([
+        getServerRoles(activeServer),
+        getMemberRoles(activeServer, memberId),
+      ])
+      setMemberRolesList(all)
+      setMemberAssignedIds(assigned.map((r) => r.id))
+    } catch (err) {
+      setMemberRolesError(friendlyError(err))
+      setMemberRolesList([])
+    } finally {
+      setMemberRolesLoading(false)
+    }
+  }
+
+  // HU-3: assign (PUT) or remove (DELETE) a role for the open member. Returns
+  // true on success so the modal keeps its optimistic checkbox; false (403/other)
+  // so it reverts. Member permissions are the backend-computed union of their
+  // roles, so nothing is computed here. When the modified member is the current
+  // user, their flattened admin permissions are refreshed so admin-gated UI
+  // (e.g. the Roles shield icon) updates without a screen reload (CA2).
+  const handleToggleMemberRole = async (role: ServerRole, assign: boolean): Promise<boolean> => {
+    if (!memberRolesTarget) return false
+    setMemberRoleBusyId(role.id)
+    setMemberRolesError("")
+    try {
+      if (assign) {
+        await assignRoleToMember(activeServer, memberRolesTarget.id, role.id)
+      } else {
+        await removeRoleFromMember(activeServer, memberRolesTarget.id, role.id)
+      }
+      if (user?.id && memberRolesTarget.id === user.id) {
+        getMemberPermissions(activeServer, user.id)
+          .then(setMemberPermissions)
+          .catch(() => undefined)
+      }
+      return true
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        setMemberRolesError("No tenés permisos para asignar o quitar este rol.")
+      } else {
+        setMemberRolesError(friendlyError(err))
+      }
+      return false
+    } finally {
+      setMemberRoleBusyId("")
     }
   }
 
@@ -1916,6 +1992,31 @@ export default function ChatScreen() {
                             {STATUS_LABELS[m.status]}
                           </Text>
                         </View>
+                        {/* HU-3: admin-only per-member action to assign/remove
+                            roles. Gated by canAdministrate — the exact condition
+                            that shows the Roles (shield) icon. A separate touchable
+                            that stops the press from bubbling to the row's
+                            tap-to-open-profile navigation. */}
+                        {canAdministrate ? (
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation()
+                              openMemberRoles(m.id, m.name)
+                            }}
+                            accessibilityLabel={`Gestionar roles de ${m.name}`}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            style={{
+                              width: 26,
+                              height: 26,
+                              borderRadius: 8,
+                              alignItems: "center",
+                              justifyContent: "center",
+                              backgroundColor: "rgba(255,255,255,0.06)",
+                            }}
+                          >
+                            <Ionicons name="shield-outline" size={14} color="#8DA8AC" />
+                          </TouchableOpacity>
+                        ) : null}
                         {/* HU-7: owner-only per-member action to hand over ownership.
                             A separate touchable that stops the press from bubbling to
                             the row's tap-to-open-profile navigation. */}
@@ -2510,6 +2611,19 @@ export default function ChatScreen() {
         onDelete={handleDeleteRole}
         onCreate={handleCreateRole}
         onUpdatePermissions={handleUpdateRolePermissions}
+      />
+
+      {/* HU-3: per-member role assignment */}
+      <MemberRolesModal
+        visible={memberRolesOpen}
+        memberName={memberRolesTarget?.name ?? ""}
+        roles={memberRolesList}
+        assignedRoleIds={memberAssignedIds}
+        loading={memberRolesLoading}
+        error={memberRolesError}
+        busyRoleId={memberRoleBusyId}
+        onClose={() => setMemberRolesOpen(false)}
+        onToggle={handleToggleMemberRole}
       />
 
       {/* Transfer ownership (HU-7) */}

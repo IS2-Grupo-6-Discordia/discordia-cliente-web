@@ -740,6 +740,54 @@ export async function updateRolePermissions(
   return toServerRole(res)
 }
 
+// ---- HU-3: assign/remove a role to/from a member ----------------------------
+
+// A member's roles (GET /servers/{id}/members/{userId}/roles → MemberRolesOut,
+// the same shape getMemberPermissions reads). Mapped through toServerRole so the
+// role selector can pre-check the ones the member already has. Ordered by the
+// backend's `position`, like getServerRoles.
+export async function getMemberRoles(serverId: string, userId: string): Promise<ServerRole[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(300)
+    return []
+  }
+  const res = await api<{ user_id: string; roles: BackendRole[] }>(
+    `/servers/${serverId}/members/${userId}/roles`,
+  )
+  return res.roles.map(toServerRole)
+}
+
+// HU-3: assign a role to a member (PUT, no body, idempotent). Admin-only — the
+// backend answers 403 when the caller lacks MANAGE_ROLES/ADMINISTRATOR or tries
+// to assign a role whose permissions they don't hold themselves. The response
+// carries no meaningful body, so nothing is mapped. Member permissions are the
+// backend-computed union of their roles; the frontend computes nothing.
+export async function assignRoleToMember(
+  serverId: string,
+  userId: string,
+  roleId: string,
+): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+  await api<void>(`/servers/${serverId}/members/${userId}/roles/${roleId}`, { method: "PUT" })
+}
+
+// HU-3: remove a role from a member (DELETE → 204, idempotent). Same admin/403
+// rules as assignRoleToMember. On success (204) the client returns undefined.
+export async function removeRoleFromMember(
+  serverId: string,
+  userId: string,
+  roleId: string,
+): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+  await api<void>(`/servers/${serverId}/members/${userId}/roles/${roleId}`, { method: "DELETE" })
+}
+
 // The permission strings the current user holds in a server, flattened across
 // all their roles (GET /servers/{id}/members/{id}/roles → MemberRolesOut). Lets
 // the UI surface admin-only actions without inventing any permission logic: it

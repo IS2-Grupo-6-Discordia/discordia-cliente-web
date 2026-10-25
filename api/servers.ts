@@ -5,12 +5,24 @@ import type {
   Server,
   Category,
   RoleGroup,
+  ServerRole,
   Invite,
   ServerMember,
   OwnershipTransfer,
+  ChannelOverwrite,
   ServerBan,
   MyServerPermissions,
 } from "./types"
+
+// The backend's admin permission string, surfaced in each RoleOut.permissions[].
+// The UI reads it to decide whether to show admin-only actions (banner config,
+// role management); it is the backend's own vocabulary, not invented here.
+export const ADMIN_PERMISSION = "administrator"
+
+// The backend's "manage roles" permission string. A member who holds it (even
+// without ADMINISTRATOR) may administer roles, so the UI reads it to decide
+// whether to surface role management.
+export const MANAGE_ROLES_PERMISSION = "manage_roles"
 
 // Reads always stay mocked: the backend does NOT expose GET /servers,
 // GET categories, or GET roles endpoints yet, so there is nothing to call.
@@ -174,6 +186,7 @@ interface BackendServerSummary {
   id: string
   name: string
   icon_url: string | null
+  banner_url: string | null
   owner_id: string
   created_at: string
 }
@@ -220,6 +233,7 @@ function toServer(backend: BackendServerSummary): Server {
     abbr: abbrFor(backend.name),
     color: colorFor(backend.id),
     iconUrl: backend.icon_url ?? null,
+    bannerUrl: backend.banner_url ?? null,
     ownerId: backend.owner_id,
   }
 }
@@ -355,6 +369,62 @@ export async function leaveServer(serverId: string): Promise<void> {
   await api<void>("/servers/" + serverId + "/members/me", { method: "DELETE" })
 }
 
+export async function deleteServer(serverId: string, confirmationName: string): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+
+  await api<void>("/servers/" + serverId, {
+    method: "DELETE",
+    body: JSON.stringify({ confirmation_name: confirmationName }),
+  })
+}
+
+// HU-4 (#95): edit a server's banner. Admin-only — the backend answers 403 when
+// the caller lacks admin permissions (CA2), and 422 when the image's format or
+// size is unsupported, saving nothing in that case (CA3). Sent as a multipart
+// PATCH with a single `banner` file field, mirroring how createServer uploads
+// the icon. Returns the updated server so the new banner shows for everyone once
+// it persists (CA1). `banner` is a web Blob or a native file descriptor.
+type ServerImageUpload = Blob | { uri: string; name: string; type: string }
+
+// HU-4: edit the server's general settings (name, icon and/or banner) in a
+// single PATCH. Only the fields that are passed get sent; the backend rejects
+// an empty patch with 422, so the caller must send at least one.
+export async function updateServer(
+  serverId: string,
+  fields: { name?: string; icon?: ServerImageUpload; banner?: ServerImageUpload },
+): Promise<Server> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    const existing = MOCK_SERVERS.find((s) => s.id === serverId)
+    const name = fields.name ?? existing?.name ?? "Servidor"
+    const blobUrl = (img?: ServerImageUpload) =>
+      img && typeof URL !== "undefined" && img instanceof Blob ? URL.createObjectURL(img) : null
+    return {
+      id: serverId,
+      name,
+      abbr: abbrFor(name),
+      color: colorFor(serverId),
+      iconUrl: blobUrl(fields.icon) ?? existing?.iconUrl ?? null,
+      bannerUrl: blobUrl(fields.banner) ?? existing?.bannerUrl ?? null,
+    }
+  }
+
+  const fd = new FormData()
+  if (fields.name !== undefined) fd.append("name", fields.name)
+  const appendImage = (field: string, img?: ServerImageUpload) => {
+    if (!img) return
+    if (img instanceof Blob) fd.append(field, img, field)
+    else fd.append(field, new NativeFile(img.uri) as any)
+  }
+  appendImage("icon", fields.icon)
+  appendImage("banner", fields.banner)
+  const res = await apiUpload<BackendServerSummary>("/servers/" + serverId, fd, "PATCH")
+  return toServer(res)
+}
+
 // Optional preview of an invite before joining (HU-3 optional).
 export async function resolveInvite(code: string): Promise<Invite> {
   if (WRITE_USE_MOCK) {
@@ -396,13 +466,13 @@ export async function getCommonServers(userId: string): Promise<Server[]> {
   return res.map(toServer)
 }
 
-export async function getServerMembers(serverId: string): Promise<ServerMember[]> {
-  if (WRITE_USE_MOCK) {
-    await mockDelay(500)
-    return []
-  }
-
-  const rows = await api<BackendServerMember[]>(`/servers/${serverId}/members`)
+// Hydrates a list of backend member rows (user id + role + joined_at) into the
+// UI `ServerMember` shape: names, avatars and statuses come from the auth
+// service in a single batch call and are merged by id. A member whose public
+// profile can't be resolved still appears, with a neutral fallback name, so the
+// list is never silently short. Shared by getServerMembers and getRoleMembers
+// so both resolve profiles identically and preserve the backend's order.
+async function toServerMembers(rows: BackendServerMember[]): Promise<ServerMember[]> {
   const profiles = await getUsersBatch(rows.map((row) => row.user_id))
   const byId = new Map(profiles.map((profile) => [profile.id, profile]))
 
@@ -419,6 +489,33 @@ export async function getServerMembers(serverId: string): Promise<ServerMember[]
       joinedAt: row.joined_at,
     }
   })
+}
+
+export async function getServerMembers(serverId: string): Promise<ServerMember[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(500)
+    return []
+  }
+
+  const rows = await api<BackendServerMember[]>(`/servers/${serverId}/members`)
+  return toServerMembers(rows)
+}
+
+// HU-8: lists the members that have a given role, so an admin can audit who has
+// access to what. The backend returns the same member shape and order as the
+// server members list (owner first, then by join date), so profiles are
+// resolved identically via toServerMembers. The backend answers 403 when the
+// caller isn't a member or lacks MANAGE_ROLES, and 404 when the server or role
+// doesn't exist (or the role belongs to another server). Empty array when
+// nobody has the role.
+export async function getRoleMembers(serverId: string, roleId: string): Promise<ServerMember[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(500)
+    return []
+  }
+
+  const rows = await api<BackendServerMember[]>(`/servers/${serverId}/roles/${roleId}/members`)
+  return toServerMembers(rows)
 }
 
 // ---- Channels: delete + update -----------------------------------------------
@@ -461,6 +558,78 @@ export async function createChannel(
   return api<BackendChannel>(`/servers/${serverId}/channels`, {
     method: "POST",
     body: JSON.stringify(data),
+  })
+}
+
+// ---- HU-7: per-channel role permission overrides ----------------------------
+
+// A channel overwrite as returned by the backend (snake_case `role_id`).
+interface BackendChannelOverwrite {
+  role_id: string
+  allow: string[]
+  deny: string[]
+}
+
+function toChannelOverwrite(backend: BackendChannelOverwrite): ChannelOverwrite {
+  return { roleId: backend.role_id, allow: backend.allow, deny: backend.deny }
+}
+
+// HU-7: list every role's permission overwrite for a channel. A role with no
+// overwrite simply isn't in the list (its permissions are fully inherited).
+// `channelId` is the real backend channel id (the same one updateChannel uses).
+export async function getChannelOverwrites(
+  serverId: string,
+  channelId: string,
+): Promise<ChannelOverwrite[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(400)
+    return []
+  }
+  const res = await api<BackendChannelOverwrite[]>(
+    `/servers/${serverId}/channels/${channelId}/overwrites`,
+  )
+  return res.map(toChannelOverwrite)
+}
+
+// HU-7: create or replace a role's overwrite for a channel. The backend replaces
+// the whole allow/deny pair, so the COMPLETE desired lists are always sent. When
+// BOTH lists are empty the backend deletes the overwrite (the role goes back to
+// fully inheriting). Admin-only — the backend answers 403 when the caller lacks
+// permission (or grants/denies a permission they don't hold), 404 when the
+// channel or role no longer exists, and 422 when a permission isn't valid for a
+// channel. The response body (the stored overwrite) isn't read back: the caller
+// already holds the computed allow/deny it just sent.
+export async function setChannelOverwrite(
+  serverId: string,
+  channelId: string,
+  roleId: string,
+  allow: string[],
+  deny: string[],
+): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+  await api<void>(`/servers/${serverId}/channels/${channelId}/overwrites/${roleId}`, {
+    method: "PUT",
+    body: JSON.stringify({ allow, deny }),
+  })
+}
+
+// HU-7: remove a role's overwrite for a channel (DELETE → 204, idempotent). The
+// role goes back to fully inheriting its server-level permissions. Same admin/403
+// rules as setChannelOverwrite.
+export async function deleteChannelOverwrite(
+  serverId: string,
+  channelId: string,
+  roleId: string,
+): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+  await api<void>(`/servers/${serverId}/channels/${channelId}/overwrites/${roleId}`, {
+    method: "DELETE",
   })
 }
 
@@ -591,6 +760,225 @@ export async function rejectOwnershipTransfer(
     { method: "POST" },
   )
   return toOwnershipTransfer(res)
+}
+
+// ---- HU-5 (#92): roles -------------------------------------------------------
+
+// A real role as returned by the roles endpoints (RoleOut).
+interface BackendRole {
+  id: string
+  server_id: string
+  name: string
+  permissions: string[]
+  position: number
+  created_at: string
+}
+
+function toServerRole(backend: BackendRole): ServerRole {
+  return {
+    id: backend.id,
+    serverId: backend.server_id,
+    name: backend.name,
+    permissions: backend.permissions,
+    position: backend.position,
+  }
+}
+
+// The server's real role list (GET /servers/{id}/roles). Distinct from getRoles,
+// which returns the member roster grouped for the sidebar; this feeds the role
+// manager. Ordered by the backend's `position`.
+export async function getServerRoles(serverId: string): Promise<ServerRole[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(400)
+    return []
+  }
+  const res = await api<BackendRole[]>(`/servers/${serverId}/roles`)
+  return res.map(toServerRole)
+}
+
+// The id of the server's default role (the one assigned to new members), or null
+// when none is set. The UI uses it to block deletion of that role, which the
+// backend rejects with 409 (a default role can't be deleted).
+export async function getDefaultRoleId(serverId: string): Promise<string | null> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(300)
+    return null
+  }
+  const res = await api<{ server_id: string; role: BackendRole | null }>(
+    `/servers/${serverId}/default-role`,
+  )
+  return res.role?.id ?? null
+}
+
+// HU-4 (#95): set the server's default role (the one new members auto-receive).
+// Admin-only — the backend answers 403 when the caller lacks
+// MANAGE_ROLES/ADMINISTRATOR, or tries to set a role whose permissions they
+// don't hold themselves. Sent as PUT with a single `role_id` field, and the
+// response mirrors GET /default-role (`{ server_id, role }`), so the new default
+// role id is read back the same way getDefaultRoleId reads it.
+export async function setDefaultRole(serverId: string, roleId: string): Promise<string | null> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return roleId
+  }
+  const res = await api<{ server_id: string; role: BackendRole | null }>(
+    `/servers/${serverId}/default-role`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ role_id: roleId }),
+    },
+  )
+  return res.role?.id ?? roleId
+}
+
+// HU-5 (#92): permanently delete a role. Admin-only — the backend answers 403
+// when the caller lacks admin permissions (CA2), and 409 when the role is the
+// server's default role or an `administrator` role the caller holds. On success
+// (204) the members that had the role lose its permissions (CA1).
+export async function deleteRole(serverId: string, roleId: string): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+  await api<void>(`/servers/${serverId}/roles/${roleId}`, { method: "DELETE" })
+}
+
+// HU-1: create a role in a server. Admin-only — the backend assigns the default
+// permissions and position, so the frontend only sends the name. The backend
+// answers 403 when the caller lacks MANAGE_ROLES/ADMINISTRATOR (CA2), 409 when a
+// role with that name already exists, and 422 when the name is empty or longer
+// than 100 chars. On success (201) it returns the created role (same RoleOut
+// shape as the roles listed by getServerRoles).
+export async function createRole(serverId: string, name: string): Promise<ServerRole> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    const id = "role-" + Math.random().toString(36).slice(2, 10)
+    return { id, serverId, name, permissions: [], position: 0 }
+  }
+  const res = await api<BackendRole>(`/servers/${serverId}/roles`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  })
+  return toServerRole(res)
+}
+
+// HU-2: edit a role's permissions. Admin-only. The backend REPLACES the whole
+// permission mask, so the COMPLETE desired list is always sent (an empty array
+// clears every permission). It answers 403 when the caller lacks
+// MANAGE_ROLES/ADMINISTRATOR or tries to grant/remove a permission they don't
+// hold themselves (CA3), 409 when removing `administrator` from the caller's own
+// role (CA2; the owner is exempt), and 422 when a permission name is invalid. On
+// success (200) it returns the updated role (same RoleOut shape as getServerRoles).
+export async function updateRolePermissions(
+  serverId: string,
+  roleId: string,
+  permissions: string[],
+): Promise<ServerRole> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return { id: roleId, serverId, name: "Rol", permissions, position: 0 }
+  }
+  const res = await api<BackendRole>(`/servers/${serverId}/roles/${roleId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ permissions }),
+  })
+  return toServerRole(res)
+}
+
+// HU-6: reorder the server's role hierarchy. `roleIds` is the COMPLETE list of
+// the server's roles, each exactly once, in the desired order (first = position
+// 1 = top). Admin-only — the backend answers 403 when the caller lacks
+// MANAGE_ROLES/ADMINISTRATOR or the new order would place a role at/above the
+// caller's own level (hierarchy violation; the owner is exempt), 404 when the
+// server doesn't exist, and 422 when the list is empty, has duplicates, carries
+// ids from another server, or is incomplete. On success (200) it returns the
+// already-reordered role list (position 1..N), mapped like getServerRoles so the
+// modal can replace its list in place without a reload.
+export async function reorderRoles(serverId: string, roleIds: string[]): Promise<ServerRole[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return roleIds.map((id, i) => ({ id, serverId, name: `Rol ${i + 1}`, permissions: [], position: i + 1 }))
+  }
+  const res = await api<BackendRole[]>(`/servers/${serverId}/roles/reorder`, {
+    method: "PUT",
+    body: JSON.stringify({ role_ids: roleIds }),
+  })
+  return res.map(toServerRole)
+}
+
+// ---- HU-3: assign/remove a role to/from a member ----------------------------
+
+// A member's roles (GET /servers/{id}/members/{userId}/roles → MemberRolesOut,
+// the same shape getMemberPermissions reads). Mapped through toServerRole so the
+// role selector can pre-check the ones the member already has. Ordered by the
+// backend's `position`, like getServerRoles.
+export async function getMemberRoles(serverId: string, userId: string): Promise<ServerRole[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(300)
+    return []
+  }
+  const res = await api<{ user_id: string; roles: BackendRole[] }>(
+    `/servers/${serverId}/members/${userId}/roles`,
+  )
+  return res.roles.map(toServerRole)
+}
+
+// HU-3: assign a role to a member (PUT, no body, idempotent). Admin-only — the
+// backend answers 403 when the caller lacks MANAGE_ROLES/ADMINISTRATOR or tries
+// to assign a role whose permissions they don't hold themselves. The response
+// carries no meaningful body, so nothing is mapped. Member permissions are the
+// backend-computed union of their roles; the frontend computes nothing.
+export async function assignRoleToMember(
+  serverId: string,
+  userId: string,
+  roleId: string,
+): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+  await api<void>(`/servers/${serverId}/members/${userId}/roles/${roleId}`, { method: "PUT" })
+}
+
+// HU-3: remove a role from a member (DELETE → 204, idempotent). Same admin/403
+// rules as assignRoleToMember. On success (204) the client returns undefined.
+export async function removeRoleFromMember(
+  serverId: string,
+  userId: string,
+  roleId: string,
+): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+  await api<void>(`/servers/${serverId}/members/${userId}/roles/${roleId}`, { method: "DELETE" })
+}
+
+// The permission strings the current user holds in a server, flattened across
+// all their roles (GET /servers/{id}/members/{id}/roles → MemberRolesOut). Lets
+// the UI surface admin-only actions without inventing any permission logic: it
+// reads the backend's own `permissions` arrays. Returns [] on any failure, so a
+// caller that can't confirm admin simply falls back to owner-only gating.
+export async function getMemberPermissions(
+  serverId: string,
+  userId: string,
+): Promise<string[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(300)
+    return []
+  }
+  try {
+    const res = await api<{ user_id: string; roles: BackendRole[] }>(
+      `/servers/${serverId}/members/${userId}/roles`,
+    )
+    const permissions = new Set<string>()
+    for (const role of res.roles) {
+      for (const permission of role.permissions) permissions.add(permission)
+    }
+    return Array.from(permissions)
+  } catch {
+    return []
+  }
 }
 
 // ---- Moderation: bans (HU-25 / HU-26) -----------------------------------------

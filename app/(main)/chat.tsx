@@ -27,6 +27,7 @@ import {
   revokeInvite,
   joinServer,
   leaveServer,
+  deleteServer,
   deleteChannel,
   updateChannel,
   reorderChannels,
@@ -35,6 +36,24 @@ import {
   getPendingTransfer,
   acceptOwnershipTransfer,
   rejectOwnershipTransfer,
+  updateServer,
+  getServerRoles,
+  getDefaultRoleId,
+  setDefaultRole,
+  deleteRole,
+  createRole,
+  updateRolePermissions,
+  reorderRoles,
+  getMemberPermissions,
+  getMemberRoles,
+  assignRoleToMember,
+  removeRoleFromMember,
+  getChannelOverwrites,
+  setChannelOverwrite,
+  deleteChannelOverwrite,
+  getRoleMembers,
+  ADMIN_PERMISSION,
+  MANAGE_ROLES_PERMISSION,
   getMyServerPermissions,
   banMember,
   listBans,
@@ -44,11 +63,13 @@ import type {
   Server,
   Category,
   RoleGroup,
+  ServerRole,
   Member,
   ServerMember,
   Message,
   Invite,
   OwnershipTransfer,
+  ChannelOverwrite,
   ServerBan,
   MyServerPermissions,
 } from "@/api/types"
@@ -63,10 +84,31 @@ import Avatar from "@/components/Avatar"
 import StatusDot, { STATUS_LABELS } from "@/components/StatusDot"
 import ModalShell from "@/components/ModalShell"
 import PressableScale from "@/components/PressableScale"
+import DeleteServerModal from "@/components/DeleteServerModal"
+import ServerSettingsModal from "@/components/ServerSettingsModal"
+import RolesModal from "@/components/RolesModal"
+import RolePermissionsModal from "@/components/RolePermissionsModal"
+import MemberRolesModal from "@/components/MemberRolesModal"
+import RoleMembersModal from "@/components/RoleMembersModal"
+import ChannelPermissionsModal from "@/components/ChannelPermissionsModal"
 import MemberActionsMenu from "@/components/MemberActionsMenu"
 import type { MemberAction } from "@/components/MemberActionsMenu"
 
 const SERVER_NAME_MAX = 100
+
+// Icon rules mirrored from the backend (microservicio-servidores): it accepts
+// only these content types and rejects files over 5 MB with a 422. Validating
+// client-side gives instant feedback and avoids a doomed upload round-trip.
+const ICON_MAX_BYTES = 5 * 1024 * 1024
+const ICON_ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"]
+const ICON_FORMAT_ERROR = "Formato de ícono no soportado. Usá JPEG, PNG o WebP."
+const ICON_SIZE_ERROR = "El ícono no puede superar los 5 MB."
+const NAME_TOO_LONG_ERROR = `El nombre del servidor no puede superar los ${SERVER_NAME_MAX} caracteres.`
+
+// HU-5: the backend rejects an owner's leave attempt with 409. We block it in
+// the UI too and explain the only two ways out (same wording the backend uses).
+const OWNER_LEAVE_NOTICE =
+  "Sos el dueño de este servidor. Para abandonarlo, primero transferí la propiedad a otro miembro o eliminá el servidor."
 
 // Rail servers with non-UUID ids ("1".."4") are mock/example servers. Real
 // backend actions (invite, leave...) only make sense against a real server id.
@@ -75,6 +117,36 @@ const UUID_RE =
 
 function isRealServerId(id: string): boolean {
   return UUID_RE.test(id)
+}
+
+// HU-7: maps a channel-overwrite API failure to a user-safe Spanish message.
+// 403: lacking permission (or changing a permission you don't hold). 404: the
+// channel or role no longer exists. 422: the permission isn't valid for a
+// channel. Anything else falls back to the shared friendlyError mapping.
+function channelOverwriteError(err: unknown): string {
+  if (err instanceof ApiError && err.status === 403) {
+    return "No tenés permisos para cambiar los permisos de este canal o alguno de esos permisos."
+  }
+  if (err instanceof ApiError && err.status === 404) {
+    return "El canal o el rol ya no existe."
+  }
+  if (err instanceof ApiError && err.status === 422) {
+    return "Alguno de los permisos no es válido para un canal."
+  }
+  return friendlyError(err)
+}
+
+// HU-8: maps a "ver miembros por rol" API failure to a user-safe Spanish
+// message. 403: not a member or lacking MANAGE_ROLES. 404: the role (or server)
+// no longer exists. Anything else falls back to the shared friendlyError mapping.
+function viewRoleMembersError(err: unknown): string {
+  if (err instanceof ApiError && err.status === 403) {
+    return "No tenés permisos para ver los miembros de este rol."
+  }
+  if (err instanceof ApiError && err.status === 404) {
+    return "El rol ya no existe."
+  }
+  return friendlyError(err)
 }
 
 // HU-2 (CA1): invite configuration options. Values are what the backend expects:
@@ -289,6 +361,72 @@ export default function ChatScreen() {
   const [leaveBusy, setLeaveBusy] = useState(false)
   const [leaveError, setLeaveError] = useState("")
 
+  const [deleteSrvOpen, setDeleteSrvOpen] = useState(false)
+  const [deleteSrvBusy, setDeleteSrvBusy] = useState(false)
+  const [deleteSrvError, setDeleteSrvError] = useState("")
+
+  // Server settings (HU-4 / #95), banner-only for now. Admin-gated.
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsBusy, setSettingsBusy] = useState(false)
+  const [settingsError, setSettingsError] = useState("")
+
+  // Role manager (HU-5 / #92). Admin-gated.
+  const [rolesOpen, setRolesOpen] = useState(false)
+  const [rolesList, setRolesList] = useState<ServerRole[]>([])
+  const [rolesLoading, setRolesLoading] = useState(false)
+  const [rolesError, setRolesError] = useState("")
+  const [roleBusyId, setRoleBusyId] = useState("")
+  const [roleCreateBusy, setRoleCreateBusy] = useState(false)
+  const [roleUpdateBusy, setRoleUpdateBusy] = useState(false)
+  const [defaultRoleId, setDefaultRoleId] = useState<string | null>(null)
+  // HU-4: the role whose "Marcar como por defecto" request is in flight.
+  const [roleDefaultBusyId, setRoleDefaultBusyId] = useState("")
+  // HU-6: reorder hierarchy. `roleReorderBusy` flags the save request; the
+  // current user's own roles feed the client-side hierarchy helper (CA2).
+  const [roleReorderBusy, setRoleReorderBusy] = useState(false)
+  const [currentUserRoles, setCurrentUserRoles] = useState<ServerRole[]>([])
+  // HU-2: dedicated permission editor (drill-in from a role row). `rolePermsTarget`
+  // is the role being edited; it reuses roleUpdateBusy / rolesError for the save.
+  const [rolePermsOpen, setRolePermsOpen] = useState(false)
+  const [rolePermsTarget, setRolePermsTarget] = useState<ServerRole | null>(null)
+
+  // HU-3: per-member role assignment selector. Admin-gated (same condition as
+  // the role manager). `memberRolesList` is every server role; `memberAssignedIds`
+  // is the loaded set of ids the target member already has (pre-checked).
+  const [memberRolesOpen, setMemberRolesOpen] = useState(false)
+  const [memberRolesTarget, setMemberRolesTarget] = useState<{ id: string; name: string } | null>(null)
+  const [memberRolesList, setMemberRolesList] = useState<ServerRole[]>([])
+  const [memberAssignedIds, setMemberAssignedIds] = useState<string[]>([])
+  const [memberRolesLoading, setMemberRolesLoading] = useState(false)
+  const [memberRolesError, setMemberRolesError] = useState("")
+  const [memberRoleBusyId, setMemberRoleBusyId] = useState("")
+
+  // HU-8: read-only "ver miembros por rol" list. Admin-gated (same condition as
+  // the role manager). `roleMembersTarget` is the role being inspected (id+name);
+  // `roleMembersList` is the loaded members that have it.
+  const [roleMembersOpen, setRoleMembersOpen] = useState(false)
+  const [roleMembersTarget, setRoleMembersTarget] = useState<{ id: string; name: string } | null>(null)
+  const [roleMembersList, setRoleMembersList] = useState<ServerMember[]>([])
+  const [roleMembersLoading, setRoleMembersLoading] = useState(false)
+  const [roleMembersError, setRoleMembersError] = useState("")
+
+  // HU-7: per-channel role permission overrides. Admin-gated (same canAdministrate
+  // condition as the role manager). The channel being edited (editChTarget) is the
+  // target; `channelOverwrites` is the channel's loaded overwrites and
+  // `channelPermsList` every server role.
+  const [channelPermsOpen, setChannelPermsOpen] = useState(false)
+  const [channelPermsTarget, setChannelPermsTarget] = useState<{ id: string; name: string } | null>(null)
+  const [channelPermsList, setChannelPermsList] = useState<ServerRole[]>([])
+  const [channelOverwrites, setChannelOverwrites] = useState<ChannelOverwrite[]>([])
+  const [channelPermsLoading, setChannelPermsLoading] = useState(false)
+  const [channelPermsError, setChannelPermsError] = useState("")
+  const [channelPermsBusyId, setChannelPermsBusyId] = useState("")
+
+  // Admin permissions the current user holds in the active server, flattened
+  // from the backend's own role permissions (HU-4/HU-5 gating). Empty when the
+  // user isn't an admin or it couldn't be confirmed -> falls back to owner-only.
+  const [memberPermissions, setMemberPermissions] = useState<string[]>([])
+
   // Ownership transfer (HU-7)
   // Owner-initiated transfer modal.
   const [transferOpen, setTransferOpen] = useState(false)
@@ -390,6 +528,26 @@ export default function ChatScreen() {
       .catch(() => setMessages([]))
   }, [activeChannel])
 
+  // HU-4/HU-5 gating: load the current user's admin permissions for the active
+  // real server, so the banner config and role manager can be surfaced to
+  // admins (not just the owner). Clears on server change; on any failure it
+  // stays empty, so the UI falls back to owner-only gating.
+  useEffect(() => {
+    setMemberPermissions([])
+    if (!activeServer || !isRealServerId(activeServer) || !user?.id) return
+    let active = true
+    getMemberPermissions(activeServer, user.id)
+      .then((perms) => {
+        if (active) setMemberPermissions(perms)
+      })
+      .catch(() => {
+        if (active) setMemberPermissions([])
+      })
+    return () => {
+      active = false
+    }
+  }, [activeServer, user?.id])
+
   // HU-7: when a real server becomes active, check for a pending ownership
   // transfer relevant to the caller. The recipient of a pending transfer sees a
   // banner; everyone else (and mock servers) sees nothing.
@@ -434,6 +592,31 @@ export default function ChatScreen() {
     !!activeServer && servers.find((s) => s.id === activeServer)?.ownerId === user?.id
 
   const activeServerName = servers.find((s) => s.id === activeServer)?.name ?? ""
+  const activeServerBannerUrl = servers.find((s) => s.id === activeServer)?.bannerUrl ?? null
+  const activeServerIconUrl = servers.find((s) => s.id === activeServer)?.iconUrl ?? null
+
+  // Admin of the active server: the owner always qualifies; a non-owner member
+  // qualifies when the backend grants them the `administrator` permission. Gates
+  // the banner config (CA2 of #95) and the role manager (CA2 of #92). Falls back
+  // to owner-only when permissions couldn't be confirmed.
+  const canAdministrate =
+    !!activeServer &&
+    isRealServerId(activeServer) &&
+    (isOwner || memberPermissions.includes(ADMIN_PERMISSION))
+
+  // Can manage roles: the backend lets anyone with MANAGE_ROLES (or ADMINISTRATOR,
+  // or the owner) administer roles — a wider set than canAdministrate, which only
+  // accepts the owner or ADMINISTRATOR. Gates ALL the role UI (create/edit/delete/
+  // default/reorder, assign per member, view members). Per-channel overwrites
+  // (HU-7) deliberately stay under canAdministrate: they live inside the
+  // admin-gated "Editar canal" modal, so a manage_roles-only user cannot reach
+  // them from the UI (documented limitation). Same real-server/fallback rules.
+  const canManageRoles =
+    !!activeServer &&
+    isRealServerId(activeServer) &&
+    (isOwner ||
+      memberPermissions.includes(ADMIN_PERMISSION) ||
+      memberPermissions.includes(MANAGE_ROLES_PERMISSION))
 
   // Whether the owner may offer ownership to a given member row: only the owner,
   // only on real servers, and never the owner's own row.
@@ -452,6 +635,14 @@ export default function ChatScreen() {
   // Options of a member row's "⋮" menu. Role changes will go here too.
   const memberActions = (memberId: string, memberName: string): MemberAction[] => {
     const actions: MemberAction[] = []
+    if (canManageRoles) {
+      actions.push({
+        key: "roles",
+        label: "Gestionar roles",
+        icon: "shield-outline",
+        onPress: () => openMemberRoles(memberId, memberName),
+      })
+    }
     if (canOfferTransferTo(memberId)) {
       actions.push({
         key: "transfer",
@@ -541,6 +732,415 @@ export default function ChatScreen() {
     }
   }
 
+  const openDeleteServer = () => {
+    setDeleteSrvError("")
+    setDeleteSrvOpen(true)
+  }
+
+  const handleDeleteServer = async (confirmationName: string) => {
+    setDeleteSrvBusy(true)
+    setDeleteSrvError("")
+    try {
+      await deleteServer(activeServer, confirmationName)
+      const remaining = servers.filter((s) => s.id !== activeServer)
+      setServers(remaining)
+      setActiveServer(remaining[0]?.id ?? "")
+      setDeleteSrvOpen(false)
+    } catch (err) {
+      setDeleteSrvError(friendlyError(err))
+    } finally {
+      setDeleteSrvBusy(false)
+    }
+  }
+
+  // HU-4 (#95): open the server settings (banner) modal.
+  const openSettings = () => {
+    setSettingsError("")
+    setSettingsOpen(true)
+  }
+
+  const handleSaveSettings = async (fields: {
+    name?: string
+    icon?: Blob | { uri: string; name: string; type: string }
+    banner?: Blob | { uri: string; name: string; type: string }
+  }) => {
+    setSettingsBusy(true)
+    setSettingsError("")
+    try {
+      const updated = await updateServer(activeServer, fields)
+      // Reflect the new name/icon/banner for everyone in the server list (CA1).
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === updated.id
+            ? { ...s, name: updated.name, abbr: updated.abbr, iconUrl: updated.iconUrl, bannerUrl: updated.bannerUrl }
+            : s,
+        ),
+      )
+      setSettingsOpen(false)
+    } catch (err) {
+      // 422 = empty patch or invalid name/image; the backend persisted nothing (CA3).
+      // Its Spanish detail is specific (name vs image), so surface it via friendlyError.
+      if (err instanceof ApiError && err.status === 503) {
+        setSettingsError("El almacenamiento de imágenes no está disponible ahora. Probá de nuevo en un rato.")
+      } else {
+        setSettingsError(friendlyError(err))
+      }
+    } finally {
+      setSettingsBusy(false)
+    }
+  }
+
+  // HU-5 (#92): open the role manager and load the real role list plus the
+  // default role (so its deletion can be blocked, matching the backend's 409).
+  const openRoles = async () => {
+    setRolesOpen(true)
+    setRolesError("")
+    setRoleBusyId("")
+    if (!isRealServerId(activeServer)) {
+      setRolesList([])
+      setCurrentUserRoles([])
+      return
+    }
+    setRolesLoading(true)
+    try {
+      // HU-6: also load the current user's own roles so the reorder helper (CA2)
+      // can compute their hierarchy level without a separate round-trip.
+      const [list, defaultId, myRoles] = await Promise.all([
+        getServerRoles(activeServer),
+        getDefaultRoleId(activeServer),
+        user?.id ? getMemberRoles(activeServer, user.id) : Promise.resolve([] as ServerRole[]),
+      ])
+      setRolesList(list)
+      setDefaultRoleId(defaultId)
+      setCurrentUserRoles(myRoles)
+    } catch (err) {
+      setRolesError(friendlyError(err))
+      setRolesList([])
+    } finally {
+      setRolesLoading(false)
+    }
+  }
+
+  const handleDeleteRole = async (role: ServerRole) => {
+    setRoleBusyId(role.id)
+    setRolesError("")
+    try {
+      await deleteRole(activeServer, role.id)
+      // CA1: the role is gone -> drop it from the list so its members' perms
+      // visibly refresh. The backend already revoked it from every member.
+      setRolesList((prev) => prev.filter((r) => r.id !== role.id))
+    } catch (err) {
+      // CA2: 403 without admin permission. 409: default/own-admin role.
+      if (err instanceof ApiError && err.status === 409) {
+        setRolesError("Ese rol no se puede eliminar: es el rol por defecto o un rol de administración que tenés asignado.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+    } finally {
+      setRoleBusyId("")
+    }
+  }
+
+  // HU-4 (#95): set a role as the server's default role for new members.
+  // Mirrors the other role handlers' in-place state update: on success the local
+  // defaultRoleId is replaced (no reload), so the "Por defecto" mark and the
+  // delete-disable move to the new role and the previous role becomes deletable
+  // again (unless it's an admin role — RolesModal keeps that guard). On error
+  // defaultRoleId is never touched, so the mark stays on the previous role.
+  const handleSetDefaultRole = async (role: ServerRole) => {
+    setRoleDefaultBusyId(role.id)
+    setRolesError("")
+    try {
+      const newDefaultId = await setDefaultRole(activeServer, role.id)
+      setDefaultRoleId(newDefaultId)
+    } catch (err) {
+      // 403: missing MANAGE_ROLES/ADMINISTRATOR, or setting a role whose
+      // permissions the caller doesn't hold themselves.
+      if (err instanceof ApiError && err.status === 403) {
+        setRolesError("No tenés permisos para definir este rol como rol por defecto.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+    } finally {
+      setRoleDefaultBusyId("")
+    }
+  }
+
+  // HU-1: create a role. The backend assigns default permissions + position, so
+  // we only send the name. Returns true on success so the modal can clear its
+  // input. Mirrors handleDeleteRole's state update: on success the new role is
+  // appended to the END of the list, no screen reload.
+  const handleCreateRole = async (name: string): Promise<boolean> => {
+    const trimmed = name.trim()
+    setRolesError("")
+    // Frontend validation before calling the API: non-empty, at most 100 chars.
+    if (trimmed === "" || trimmed.length > 100) {
+      setRolesError("El nombre del rol no es válido.")
+      return false
+    }
+    setRoleCreateBusy(true)
+    try {
+      const created = await createRole(activeServer, trimmed)
+      setRolesList((prev) => [...prev, created])
+      return true
+    } catch (err) {
+      // CA2: 403 without permission. 409: duplicate name. 422: invalid name.
+      if (err instanceof ApiError && err.status === 403) {
+        setRolesError("No tenés permisos para crear roles en este servidor.")
+      } else if (err instanceof ApiError && err.status === 409) {
+        setRolesError("Ya existe un rol con ese nombre.")
+      } else if (err instanceof ApiError && err.status === 422) {
+        setRolesError("El nombre del rol no es válido.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+      return false
+    } finally {
+      setRoleCreateBusy(false)
+    }
+  }
+
+  // HU-2: edit a role's permissions. Sends the COMPLETE desired list (the backend
+  // replaces the whole mask). Returns true on success so the modal can collapse
+  // the editor; false (403/409/422) keeps it open and the modal reverts its
+  // toggles. Mirrors handleCreateRole/handleDeleteRole's in-place state update:
+  // on 200 the updated role replaces the old one by id, so the "N permisos"
+  // counter refreshes without a screen reload.
+  const handleUpdateRolePermissions = async (
+    role: ServerRole,
+    permissions: string[],
+  ): Promise<boolean> => {
+    setRoleUpdateBusy(true)
+    setRolesError("")
+    try {
+      const updated = await updateRolePermissions(activeServer, role.id, permissions)
+      setRolesList((prev) => prev.map((r) => (r.id === updated.id ? updated : r)))
+      return true
+    } catch (err) {
+      // CA3: 403 without permission or granting/removing a perm you lack.
+      // CA2: 409 removing administrator from your own role. 422: invalid perm.
+      if (err instanceof ApiError && err.status === 403) {
+        setRolesError("No tenés permisos para modificar este rol o alguno de sus permisos.")
+      } else if (err instanceof ApiError && err.status === 409) {
+        setRolesError("No podés quitarle el permiso de administración a tu propio rol.")
+      } else if (err instanceof ApiError && err.status === 422) {
+        setRolesError("Alguno de los permisos no es válido.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+      return false
+    } finally {
+      setRoleUpdateBusy(false)
+    }
+  }
+
+  // HU-6: the current user's own hierarchy position — the LOWEST position number
+  // (= highest in the hierarchy) among their roles, EXCLUDING the default role.
+  // null when they hold no non-default role. The owner is exempt (handled via
+  // `isOwner` in the modal), so this is only consulted for non-owners. Mirrors
+  // the backend's "own role" rule so the reorder UI can pre-disable illegal moves.
+  const ownRolePosition = currentUserRoles
+    .filter((r) => r.id !== defaultRoleId)
+    .reduce<number | null>((min, r) => (min === null || r.position < min ? r.position : min), null)
+
+  // HU-6: persist a new role order. Sends the COMPLETE id list in the displayed
+  // order (first = position 1 = top). Mirrors the other role handlers' in-place
+  // update: on 200 the modal's list is replaced with the backend's reordered
+  // response (no reload). Returns true on success so the modal exits reorder
+  // mode; false (403/422/other) so it reverts to the previous order.
+  const handleReorderRoles = async (roleIds: string[]): Promise<boolean> => {
+    setRoleReorderBusy(true)
+    setRolesError("")
+    try {
+      const reordered = await reorderRoles(activeServer, roleIds)
+      setRolesList(reordered)
+      return true
+    } catch (err) {
+      // 403: missing MANAGE_ROLES/ADMINISTRATOR, or a hierarchy violation (moving
+      // a role to/above the caller's own level). 422: the list no longer matches
+      // the server's roles (changed/incomplete/duplicated).
+      if (err instanceof ApiError && err.status === 403) {
+        setRolesError("No podés mover roles que estén a tu nivel o por encima del tuyo, o no tenés permisos para reordenar.")
+      } else if (err instanceof ApiError && err.status === 422) {
+        setRolesError("La lista de roles cambió. Volvé a abrir el modal e intentá de nuevo.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+      return false
+    } finally {
+      setRoleReorderBusy(false)
+    }
+  }
+
+  // HU-3: open the per-member role selector. Loads every server role plus the
+  // member's current roles (so the boxes pre-check), mirroring openRoles. Mock
+  // servers have no real roles, so the selector opens empty.
+  const openMemberRoles = async (memberId: string, memberName: string) => {
+    setMemberRolesOpen(true)
+    setMemberRolesTarget({ id: memberId, name: memberName })
+    setMemberRolesError("")
+    setMemberRoleBusyId("")
+    setMemberRolesList([])
+    setMemberAssignedIds([])
+    if (!isRealServerId(activeServer)) return
+    setMemberRolesLoading(true)
+    try {
+      const [all, assigned] = await Promise.all([
+        getServerRoles(activeServer),
+        getMemberRoles(activeServer, memberId),
+      ])
+      setMemberRolesList(all)
+      setMemberAssignedIds(assigned.map((r) => r.id))
+    } catch (err) {
+      setMemberRolesError(friendlyError(err))
+      setMemberRolesList([])
+    } finally {
+      setMemberRolesLoading(false)
+    }
+  }
+
+  // HU-2: open the dedicated permission editor for a role (drill-in from its
+  // row). The modal seeds its own draft from the role's permissions and saves
+  // through handleUpdateRolePermissions, which owns the busy/error state.
+  const openRolePermissions = (role: ServerRole) => {
+    setRolePermsTarget(role)
+    setRolesError("")
+    setRolePermsOpen(true)
+  }
+
+  // HU-8: open the read-only "ver miembros por rol" list. Loads the members that
+  // have the role, mirroring openRoles/openMemberRoles. Mock servers have no real
+  // roles, so the list opens empty.
+  const openRoleMembers = async (role: ServerRole) => {
+    setRoleMembersOpen(true)
+    setRoleMembersTarget({ id: role.id, name: role.name })
+    setRoleMembersError("")
+    setRoleMembersList([])
+    if (!isRealServerId(activeServer)) return
+    setRoleMembersLoading(true)
+    try {
+      const members = await getRoleMembers(activeServer, role.id)
+      setRoleMembersList(members)
+    } catch (err) {
+      setRoleMembersError(viewRoleMembersError(err))
+      setRoleMembersList([])
+    } finally {
+      setRoleMembersLoading(false)
+    }
+  }
+
+  // HU-3: assign (PUT) or remove (DELETE) a role for the open member. Returns
+  // true on success so the modal keeps its optimistic checkbox; false (403/other)
+  // so it reverts. Member permissions are the backend-computed union of their
+  // roles, so nothing is computed here. When the modified member is the current
+  // user, their flattened admin permissions are refreshed so admin-gated UI
+  // (e.g. the Roles shield icon) updates without a screen reload (CA2).
+  const handleToggleMemberRole = async (role: ServerRole, assign: boolean): Promise<boolean> => {
+    if (!memberRolesTarget) return false
+    setMemberRoleBusyId(role.id)
+    setMemberRolesError("")
+    try {
+      if (assign) {
+        await assignRoleToMember(activeServer, memberRolesTarget.id, role.id)
+      } else {
+        await removeRoleFromMember(activeServer, memberRolesTarget.id, role.id)
+      }
+      if (user?.id && memberRolesTarget.id === user.id) {
+        getMemberPermissions(activeServer, user.id)
+          .then(setMemberPermissions)
+          .catch(() => undefined)
+      }
+      return true
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        setMemberRolesError("No tenés permisos para asignar o quitar este rol.")
+      } else {
+        setMemberRolesError(friendlyError(err))
+      }
+      return false
+    } finally {
+      setMemberRoleBusyId("")
+    }
+  }
+
+  // HU-7: open the per-channel permission editor for the channel being edited.
+  // Loads every server role plus the channel's current overwrites (so each role's
+  // three-state selectors pre-fill), mirroring openRoles/openMemberRoles. Mock
+  // servers have no real channels, so the editor opens empty.
+  const openChannelPerms = async () => {
+    if (!editChTarget) return
+    setChannelPermsTarget({ id: editChTarget.id, name: editChTarget.name })
+    setChannelPermsOpen(true)
+    setChannelPermsError("")
+    setChannelPermsBusyId("")
+    setChannelPermsList([])
+    setChannelOverwrites([])
+    if (!isRealServerId(activeServer)) return
+    setChannelPermsLoading(true)
+    try {
+      const [rolesList, overwrites] = await Promise.all([
+        getServerRoles(activeServer),
+        getChannelOverwrites(activeServer, editChTarget.id),
+      ])
+      setChannelPermsList(rolesList)
+      setChannelOverwrites(overwrites)
+    } catch (err) {
+      setChannelPermsError(friendlyError(err))
+      setChannelPermsList([])
+    } finally {
+      setChannelPermsLoading(false)
+    }
+  }
+
+  // HU-7: create/replace a role's overwrite for the open channel with the COMPLETE
+  // allow/deny lists. The backend deletes the overwrite when both are empty, so
+  // the local list drops the role in that case and upserts it otherwise (no
+  // reload). Returns true on success so the modal collapses the editor; false
+  // (403/404/422/other) so it reverts the draft to the role's loaded state.
+  const handleSaveChannelOverwrite = async (
+    role: ServerRole,
+    allow: string[],
+    deny: string[],
+  ): Promise<boolean> => {
+    if (!channelPermsTarget) return false
+    setChannelPermsBusyId(role.id)
+    setChannelPermsError("")
+    try {
+      await setChannelOverwrite(activeServer, channelPermsTarget.id, role.id, allow, deny)
+      setChannelOverwrites((prev) => {
+        const rest = prev.filter((o) => o.roleId !== role.id)
+        // Both empty -> the backend deleted the overwrite; drop it locally too.
+        if (allow.length === 0 && deny.length === 0) return rest
+        return [...rest, { roleId: role.id, allow, deny }]
+      })
+      return true
+    } catch (err) {
+      setChannelPermsError(channelOverwriteError(err))
+      return false
+    } finally {
+      setChannelPermsBusyId("")
+    }
+  }
+
+  // HU-7: drop a role's overwrite for the open channel (back to all-inherit). On
+  // success the role leaves the local overwrites list (no reload). Returns true on
+  // success so the modal collapses the editor; false so it stays open.
+  const handleRemoveChannelOverwrite = async (role: ServerRole): Promise<boolean> => {
+    if (!channelPermsTarget) return false
+    setChannelPermsBusyId(role.id)
+    setChannelPermsError("")
+    try {
+      await deleteChannelOverwrite(activeServer, channelPermsTarget.id, role.id)
+      setChannelOverwrites((prev) => prev.filter((o) => o.roleId !== role.id))
+      return true
+    } catch (err) {
+      setChannelPermsError(channelOverwriteError(err))
+      return false
+    } finally {
+      setChannelPermsBusyId("")
+    }
+  }
+
   // Forget a server we no longer belong to (left it, or lost access: HU-25).
   // HU-18: without membership we can't stay in its voice channels either.
   const dropServerLocally = async (serverId: string, notice?: string) => {
@@ -587,10 +1187,31 @@ export default function ChatScreen() {
     if (result.canceled) return
     const asset = result.assets[0]
     if (!asset) return
+
+    // CA3: reject unsupported formats and oversized files before sending,
+    // mirroring the backend (JPEG/PNG/WebP, max 5 MB) so the user gets instant,
+    // specific feedback instead of a failed upload round-trip.
     if (Platform.OS === "web") {
       const blob = await (await fetch(asset.uri)).blob()
+      if (!ICON_ALLOWED_TYPES.includes(blob.type)) {
+        setCreateError(ICON_FORMAT_ERROR)
+        return
+      }
+      if (blob.size > ICON_MAX_BYTES) {
+        setCreateError(ICON_SIZE_ERROR)
+        return
+      }
       setServerIcon(blob)
     } else {
+      const type = asset.mimeType ?? ""
+      if (type !== "" && !ICON_ALLOWED_TYPES.includes(type)) {
+        setCreateError(ICON_FORMAT_ERROR)
+        return
+      }
+      if (typeof asset.fileSize === "number" && asset.fileSize > ICON_MAX_BYTES) {
+        setCreateError(ICON_SIZE_ERROR)
+        return
+      }
       setServerIcon({
         uri: asset.uri,
         name: asset.fileName ?? "icon.jpg",
@@ -604,6 +1225,10 @@ export default function ChatScreen() {
     const name = serverName.trim()
     if (name === "") {
       setCreateError("Poné un nombre para el servidor.")
+      return
+    }
+    if (name.length > SERVER_NAME_MAX) {
+      setCreateError(NAME_TOO_LONG_ERROR)
       return
     }
     setCreateBusy(true)
@@ -651,6 +1276,9 @@ export default function ChatScreen() {
         setJoinError("No existe una invitación con ese código.")
       } else if (err instanceof ApiError && err.status === 403) {
         setJoinError("Estás baneado de este servidor.")
+      } else if (err instanceof ApiError && err.status === 410) {
+        // Expired, used up or revoked. Mirrors the deep-link route's wording.
+        setJoinError("Esta invitación expiró o alcanzó su límite de usos.")
       } else {
         setJoinError(friendlyError(err))
       }
@@ -1014,13 +1642,24 @@ export default function ChatScreen() {
       setLeaveError(MOCK_SERVER_NOTICE)
       return
     }
+    // CA (HU-5): the owner can't just leave — defense in depth in case the UI
+    // ever surfaces the action to an owner, so we never fire a doomed request.
+    if (isOwner) {
+      setLeaveError(OWNER_LEAVE_NOTICE)
+      return
+    }
     setLeaveBusy(true)
     try {
       await leaveServer(activeServer)
       await dropServerLocally(activeServer)
       setLeaveOpen(false)
     } catch (err) {
-      setLeaveError(friendlyError(err))
+      // The backend rejects an owner leave with 409 -> show the same guidance.
+      if (err instanceof ApiError && err.status === 409) {
+        setLeaveError(OWNER_LEAVE_NOTICE)
+      } else {
+        setLeaveError(friendlyError(err))
+      }
     } finally {
       setLeaveBusy(false)
     }
@@ -1264,8 +1903,8 @@ export default function ChatScreen() {
       <View
         style={{
           display: isNarrow && mobilePane !== "channels" ? "none" : "flex",
-          ...(isNarrow ? { flex: 1 } : { width: 180 }),
-          backgroundColor: "rgba(255,255,255,0.055)",
+          ...(isNarrow ? { flex: 1 } : { width: 216 }),
+          backgroundColor: isNarrow ? "#151D23" : "rgba(255,255,255,0.055)",
           borderRightWidth: 1,
           borderRightColor: "rgba(255,255,255,0.13)",
         }}
@@ -1275,19 +1914,31 @@ export default function ChatScreen() {
         <View
           style={{ paddingHorizontal: 12, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.13)" }}
         >
+          {/* HU-4 (#95): the server banner, shown to every member once set. */}
+          {activeServerBannerUrl ? (
+            <Image
+              source={{ uri: activeServerBannerUrl }}
+              style={{ width: "100%", height: 72, borderRadius: 8 }}
+              resizeMode="cover"
+            />
+          ) : null}
           <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }} numberOfLines={2}>
             {servers.find((s) => s.id === activeServer)?.name ?? ""}
           </Text>
+          {/* Primary actions — available to every member. Invitar grows to
+              anchor the row; Salir keeps its natural width beside it. */}
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+
             <PressableScale
               onPress={handleGenerateInvite}
               hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
               style={{
+                flex: 1,
                 flexDirection: "row",
                 alignItems: "center",
+                justifyContent: "center",
                 gap: 5,
-                paddingHorizontal: 10,
-                paddingVertical: 5,
+                paddingVertical: 6,
                 borderRadius: 8,
                 backgroundColor: "rgba(55,214,192,0.12)",
               }}
@@ -1302,9 +1953,10 @@ export default function ChatScreen() {
               style={{
                 flexDirection: "row",
                 alignItems: "center",
+                justifyContent: "center",
                 gap: 5,
-                paddingHorizontal: 10,
-                paddingVertical: 5,
+                paddingHorizontal: 12,
+                paddingVertical: 6,
                 borderRadius: 8,
                 backgroundColor: "rgba(255,255,255,0.05)",
               }}
@@ -1334,6 +1986,65 @@ export default function ChatScreen() {
               </PressableScale>
             ) : null}
           </View>
+          {/* Admin tools — banner config (#95), roles (#92), delete server
+              (#97). Rendered as a separate row of uniform square icon buttons
+              so they never overflow the sidebar, and only when the member can
+              see at least one of them, so the row is never empty. */}
+          {canManageRoles || (isOwner && isRealServerId(activeServer)) ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              {canAdministrate ? (
+                <PressableScale
+                  onPress={openSettings}
+                  accessibilityLabel="Configuración del servidor"
+                  hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
+                  style={{
+                    width: 34,
+                    height: 30,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(255,255,255,0.05)",
+                  }}
+                >
+                  <Ionicons name="settings-outline" size={15} color="#8DA8AC" />
+                </PressableScale>
+              ) : null}
+              {canManageRoles ? (
+                <PressableScale
+                  onPress={openRoles}
+                  accessibilityLabel="Roles del servidor"
+                  hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
+                  style={{
+                    width: 34,
+                    height: 30,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(255,255,255,0.05)",
+                  }}
+                >
+                  <Ionicons name="shield-outline" size={15} color="#8DA8AC" />
+                </PressableScale>
+              ) : null}
+              {isOwner && isRealServerId(activeServer) ? (
+                <PressableScale
+                  onPress={openDeleteServer}
+                  accessibilityLabel="Eliminar servidor"
+                  hoverStyle={{ backgroundColor: "rgba(255,127,114,0.22)" }}
+                  style={{
+                    width: 34,
+                    height: 30,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(255,127,114,0.12)",
+                  }}
+                >
+                  <Ionicons name="trash-outline" size={15} color="#FF7F72" />
+                </PressableScale>
+              ) : null}
+            </View>
+          ) : null}
         </View>
 
         <ScrollView style={{ flex: 1 }}>
@@ -1918,8 +2629,9 @@ export default function ChatScreen() {
                             {STATUS_LABELS[m.status]}
                           </Text>
                         </View>
-                        {/* Per-member actions (HU-7 transfer, HU-25 ban) behind a
-                            "⋮" menu; it stops the press from opening the profile. */}
+                        {/* Per-member actions (HU-3 roles, HU-7 transfer, HU-25
+                            ban) behind a "⋮" menu; it stops the press from opening
+                            the profile. */}
                         {(() => {
                           const actions = memberActions(m.id, m.name)
                           return actions.length > 0 ? (
@@ -1985,14 +2697,27 @@ export default function ChatScreen() {
               </View>
             ) : null}
             <Text style={LABEL}>Nombre del servidor</Text>
+            {/* CA2: no silent cap — let the user exceed the limit and show why,
+                with a live counter aligned to the backend's max of 100. */}
             <TextInput
               value={serverName}
               onChangeText={setServerName}
               placeholder="Ej: FIUBA · IS2"
               placeholderTextColor="#5E7E82"
-              maxLength={SERVER_NAME_MAX}
-              style={[FIELD, { marginBottom: 16 }]}
+              style={[FIELD, { marginBottom: 6 }]}
             />
+            <Text
+              style={{
+                color: serverName.trim().length > SERVER_NAME_MAX ? "#FF9E94" : "#5E7E82",
+                fontSize: 11,
+                textAlign: "right",
+                marginBottom: 16,
+              }}
+            >
+              {serverName.trim().length > SERVER_NAME_MAX
+                ? NAME_TOO_LONG_ERROR
+                : `${serverName.trim().length}/${SERVER_NAME_MAX}`}
+            </Text>
             <Text style={LABEL}>Ícono</Text>
             <TouchableOpacity
               onPress={handlePickIcon}
@@ -2029,8 +2754,14 @@ export default function ChatScreen() {
             </TouchableOpacity>
             <PressableScale
               onPress={handleCreateServer}
-              disabled={createBusy}
-              style={[PRIMARY_BTN, { marginTop: 18, opacity: createBusy ? 0.7 : 1 }]}
+              disabled={createBusy || serverName.trim().length > SERVER_NAME_MAX}
+              style={[
+                PRIMARY_BTN,
+                {
+                  marginTop: 18,
+                  opacity: createBusy || serverName.trim().length > SERVER_NAME_MAX ? 0.7 : 1,
+                },
+              ]}
             >
               {createBusy ? <ActivityIndicator color="#04211D" /> : <Text style={PRIMARY_TXT}>Crear servidor</Text>}
             </PressableScale>
@@ -2380,6 +3111,30 @@ export default function ChatScreen() {
             <Text style={PRIMARY_TXT}>Guardar</Text>
           )}
         </PressableScale>
+
+        {/* HU-7: per-channel role permission overrides. Admin-only (same
+            canAdministrate gate as the role manager); opens its own modal for the
+            channel being edited so this one never grows a big inline editor. */}
+        {canAdministrate && editChTarget ? (
+          <PressableScale
+            onPress={openChannelPerms}
+            accessibilityLabel="Configurar permisos por rol de este canal"
+            hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              paddingVertical: 11,
+              borderRadius: 10,
+              marginTop: 10,
+              backgroundColor: "rgba(55,214,192,0.12)",
+            }}
+          >
+            <Ionicons name="options-outline" size={16} color="#37D6C0" />
+            <Text style={{ color: "#37D6C0", fontSize: 13, fontWeight: "700" }}>Permisos por rol</Text>
+          </PressableScale>
+        ) : null}
       </ModalShell>
 
       {/* Create-channel modal */}
@@ -2474,57 +3229,180 @@ export default function ChatScreen() {
         onClose={() => setLeaveOpen(false)}
         title="Abandonar servidor"
       >
-        <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 18 }}>
-          ¿Seguro que querés abandonar{" "}
-          <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>
-            {servers.find((s) => s.id === activeServer)?.name ?? "este servidor"}
-          </Text>
-          ? Vas a perder el acceso a sus canales.
-        </Text>
+        {/* CA (HU-5): the owner is blocked from leaving — explain the only two
+            ways out (transfer or delete) instead of offering the destructive
+            action. Non-owners get the normal confirmation flow. */}
+        {isOwner ? (
+          <>
+            <View style={NOTICE_ERROR}>
+              <Text style={{ color: "#FF9E94", fontSize: 12.5, lineHeight: 18 }}>
+                {OWNER_LEAVE_NOTICE}
+              </Text>
+            </View>
+            <PressableScale
+              onPress={() => setLeaveOpen(false)}
+              hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
+              style={{
+                borderRadius: 10,
+                paddingVertical: 12,
+                alignItems: "center",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.10)",
+                backgroundColor: "rgba(255,255,255,0.06)",
+              }}
+            >
+              <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Entendido</Text>
+            </PressableScale>
+          </>
+        ) : (
+          <>
+            <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 18 }}>
+              ¿Seguro que querés abandonar{" "}
+              <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>
+                {servers.find((s) => s.id === activeServer)?.name ?? "este servidor"}
+              </Text>
+              ? Vas a perder el acceso a sus canales.
+            </Text>
 
-        {leaveError ? (
-          <View style={NOTICE_ERROR}>
-            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{leaveError}</Text>
-          </View>
-        ) : null}
+            {leaveError ? (
+              <View style={NOTICE_ERROR}>
+                <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{leaveError}</Text>
+              </View>
+            ) : null}
 
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <PressableScale
-            onPress={() => setLeaveOpen(false)}
-            disabled={leaveBusy}
-            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
-            style={{
-              flex: 1,
-              borderRadius: 10,
-              paddingVertical: 12,
-              alignItems: "center",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.10)",
-              backgroundColor: "rgba(255,255,255,0.06)",
-            }}
-          >
-            <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
-          </PressableScale>
-          <PressableScale
-            onPress={handleLeaveServer}
-            disabled={leaveBusy}
-            style={{
-              flex: 1,
-              borderRadius: 10,
-              paddingVertical: 12,
-              alignItems: "center",
-              backgroundColor: "#FF7F72",
-              opacity: leaveBusy ? 0.7 : 1,
-            }}
-          >
-            {leaveBusy ? (
-              <ActivityIndicator color="#04211D" />
-            ) : (
-              <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>Abandonar</Text>
-            )}
-          </PressableScale>
-        </View>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <PressableScale
+                onPress={() => setLeaveOpen(false)}
+                disabled={leaveBusy}
+                hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
+                style={{
+                  flex: 1,
+                  borderRadius: 10,
+                  paddingVertical: 12,
+                  alignItems: "center",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,255,255,0.10)",
+                  backgroundColor: "rgba(255,255,255,0.06)",
+                }}
+              >
+                <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
+              </PressableScale>
+              <PressableScale
+                onPress={handleLeaveServer}
+                disabled={leaveBusy}
+                style={{
+                  flex: 1,
+                  borderRadius: 10,
+                  paddingVertical: 12,
+                  alignItems: "center",
+                  backgroundColor: "#FF7F72",
+                  opacity: leaveBusy ? 0.7 : 1,
+                }}
+              >
+                {leaveBusy ? (
+                  <ActivityIndicator color="#04211D" />
+                ) : (
+                  <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>Abandonar</Text>
+                )}
+              </PressableScale>
+            </View>
+          </>
+        )}
       </ModalShell>
+
+      {/* Delete-server confirmation (HU-6 / #97) */}
+      <DeleteServerModal
+        visible={deleteSrvOpen}
+        serverName={activeServerName}
+        busy={deleteSrvBusy}
+        error={deleteSrvError}
+        onClose={() => setDeleteSrvOpen(false)}
+        onConfirm={handleDeleteServer}
+      />
+
+      {/* HU-4 (#95): server settings — banner */}
+      <ServerSettingsModal
+        visible={settingsOpen}
+        serverName={activeServerName}
+        currentIconUrl={activeServerIconUrl}
+        currentBannerUrl={activeServerBannerUrl}
+        busy={settingsBusy}
+        error={settingsError}
+        onClose={() => setSettingsOpen(false)}
+        onSave={handleSaveSettings}
+      />
+
+      {/* HU-5 (#92): role manager */}
+      <RolesModal
+        visible={rolesOpen}
+        roles={rolesList}
+        defaultRoleId={defaultRoleId}
+        loading={rolesLoading}
+        error={rolesError}
+        busyRoleId={roleBusyId}
+        defaultBusyId={roleDefaultBusyId}
+        canManageRoles={canManageRoles}
+        createBusy={roleCreateBusy}
+        reorderBusy={roleReorderBusy}
+        isOwner={isOwner}
+        ownRolePosition={ownRolePosition}
+        onClose={() => setRolesOpen(false)}
+        onDelete={handleDeleteRole}
+        onSetDefault={handleSetDefaultRole}
+        onCreate={handleCreateRole}
+        onEditPermissions={openRolePermissions}
+        onReorder={handleReorderRoles}
+        onViewMembers={openRoleMembers}
+      />
+
+      {/* HU-2: dedicated permission editor (drill-in from a role row) */}
+      <RolePermissionsModal
+        visible={rolePermsOpen}
+        roleName={rolePermsTarget?.name ?? ""}
+        role={rolePermsTarget}
+        busy={roleUpdateBusy}
+        error={rolesError}
+        onClose={() => setRolePermsOpen(false)}
+        onSave={handleUpdateRolePermissions}
+      />
+
+      {/* HU-8: read-only list of members with a given role */}
+      <RoleMembersModal
+        visible={roleMembersOpen}
+        roleName={roleMembersTarget?.name ?? ""}
+        members={roleMembersList}
+        loading={roleMembersLoading}
+        error={roleMembersError}
+        onClose={() => setRoleMembersOpen(false)}
+      />
+
+      {/* HU-3: per-member role assignment */}
+      <MemberRolesModal
+        visible={memberRolesOpen}
+        memberName={memberRolesTarget?.name ?? ""}
+        roles={memberRolesList}
+        assignedRoleIds={memberAssignedIds}
+        loading={memberRolesLoading}
+        error={memberRolesError}
+        busyRoleId={memberRoleBusyId}
+        onClose={() => setMemberRolesOpen(false)}
+        onToggle={handleToggleMemberRole}
+      />
+
+      {/* HU-7: per-channel role permission overrides */}
+      <ChannelPermissionsModal
+        visible={channelPermsOpen}
+        channelName={channelPermsTarget?.name ?? ""}
+        roles={channelPermsList}
+        overwrites={channelOverwrites}
+        loading={channelPermsLoading}
+        error={channelPermsError}
+        busyRoleId={channelPermsBusyId}
+        canAdministrate={canAdministrate}
+        onClose={() => setChannelPermsOpen(false)}
+        onSave={handleSaveChannelOverwrite}
+        onRemove={handleRemoveChannelOverwrite}
+      />
 
       {/* Transfer ownership (HU-7) */}
       <ModalShell

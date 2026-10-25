@@ -319,12 +319,12 @@ export default function ChatScreen() {
   const [accessLostNotice, setAccessLostNotice] = useState("")
 
   useEffect(() => {
-    getServers().then((list) => {
-      setServers(list)
-      // Land on the first real server the user belongs to. If they have none, no
-      // server stays selected and the screen shows its "create or join" state.
-      setActiveServer((current) => current || list[0]?.id || "")
-    })
+    getServers()
+      .then((list) => {
+        setServers(list)
+        setActiveServer((current) => current || list[0]?.id || "")
+      })
+      .catch(() => setBannerError("No pudimos cargar tus servidores. Probá de nuevo en un rato."))
   }, [])
 
   useEffect(() => {
@@ -342,13 +342,16 @@ export default function ChatScreen() {
       setActiveChannel("")
       return
     }
-    getCategories(activeServer).then((cats) => {
-      setCategories(cats)
-      // Switch focus to the new server's first text channel so we never keep
-      // showing the previous server's channel (and its messages).
-      const firstText = cats.flatMap((c) => c.channels).find((c) => c.type === "text")
-      setActiveChannel(firstText ? firstText.id : "")
-    })
+    getCategories(activeServer)
+      .then((cats) => {
+        setCategories(cats)
+        const firstText = cats.flatMap((c) => c.channels).find((c) => c.type === "text")
+        setActiveChannel(firstText ? firstText.id : "")
+      })
+      .catch(() => {
+        setCategories([])
+        setActiveChannel("")
+      })
     // Real roster from the backend (owner + members), hydrated with names/avatars.
     getServerMembers(activeServer)
       .then((members) => setRoles(membersToRoleGroups(members)))
@@ -382,7 +385,9 @@ export default function ChatScreen() {
       setMessages([])
       return
     }
-    getMessages(activeChannel).then(setMessages)
+    getMessages(activeChannel)
+      .then(setMessages)
+      .catch(() => setMessages([]))
   }, [activeChannel])
 
   // HU-7: when a real server becomes active, check for a pending ownership
@@ -551,7 +556,7 @@ export default function ChatScreen() {
 
   const handleSend = async () => {
     if (!input.trim()) return
-    const msg = await sendMessage(activeChannel, input.trim())
+    const msg = await sendMessage(activeChannel, input.trim(), user?.name)
     setMessages((prev) => [...prev, msg])
     setInput("")
   }
@@ -576,7 +581,7 @@ export default function ChatScreen() {
       return
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ["images"],
       quality: 0.8,
     })
     if (result.canceled) return
@@ -1533,11 +1538,12 @@ export default function ChatScreen() {
             </TouchableOpacity>
           ) : null}
           <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 13.5, flexShrink: 1 }} numberOfLines={1}>
-            {channel ? `# ${channel.name}` : "Discordia"}
+            {channel ? `# ${channel.name}` : activeServer ? "Sin canales" : "Inicio"}
           </Text>
           <Text style={{ color: "#8DA8AC", flex: 1, marginLeft: 8, fontSize: 11 }} numberOfLines={1}>
             {servers.find((s) => s.id === activeServer)?.name ?? ""}
           </Text>
+          {activeServer ? (
           <TouchableOpacity
             onPress={() => setShowMembers((o) => !o)}
             accessibilityLabel="Mostrar u ocultar miembros"
@@ -1560,6 +1566,7 @@ export default function ChatScreen() {
               Miembros
             </Text>
           </TouchableOpacity>
+          ) : null}
         </View>
 
         {/* HU-7: recipient banner — offered ownership of this server */}

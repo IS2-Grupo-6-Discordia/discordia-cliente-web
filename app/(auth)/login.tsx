@@ -12,6 +12,7 @@ import { useRouter } from "expo-router"
 import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
 import { login, loginWithGoogle } from "@/api/auth"
+import { useWakeState, wakeBackends } from "@/api/wake"
 import { ApiError, friendlyError } from "@/api/client"
 import PressableScale from "@/components/PressableScale"
 import AuthField from "@/components/AuthField"
@@ -22,6 +23,7 @@ const GOOGLE_UNAVAILABLE =
 
 export default function LoginScreen() {
   const { setUser, signedOutReason, clearSignedOutReason } = useAuth()
+  const wake = useWakeState()
   const router = useRouter()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -37,6 +39,7 @@ export default function LoginScreen() {
     setGoogleNotice("")
     setError("")
     try {
+      await wakeBackends()
       const res = await loginWithGoogle(idToken)
       clearSignedOutReason()
       setUser(res.user)
@@ -62,6 +65,7 @@ export default function LoginScreen() {
     setLoading(true)
     setError("")
     try {
+      await wakeBackends()
       const res = await login(email, password)
       clearSignedOutReason()
       setUser(res.user)
@@ -119,6 +123,35 @@ export default function LoginScreen() {
               Tus servidores, canales y llamadas siguen donde los dejaste.
             </Text>
           </View>
+
+          {wake === "waking" || wake === "failed" ? (
+            <View
+              accessibilityRole={wake === "failed" ? "alert" : undefined}
+              accessibilityLiveRegion="polite"
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 9,
+                padding: 10,
+                borderRadius: 12,
+                marginBottom: 12,
+                backgroundColor: "rgba(55,214,192,0.08)",
+                borderWidth: 1,
+                borderColor: "rgba(55,214,192,0.30)",
+              }}
+            >
+              {wake === "waking" ? (
+                <ActivityIndicator size="small" color="#37D6C0" />
+              ) : (
+                <Ionicons name="cloud-offline-outline" size={15} color="#F0C24B" />
+              )}
+              <Text style={{ color: "#BFE6E1", fontSize: 12, flex: 1, lineHeight: 17 }}>
+                {wake === "waking"
+                  ? "Estamos despertando el servidor. La primera vez puede tardar hasta un minuto; podés ir completando tus datos."
+                  : "No pudimos conectar con el servidor. Revisá tu conexión y probá de nuevo."}
+              </Text>
+            </View>
+          ) : null}
 
           {signedOutReason && !error ? (
             <View
@@ -239,7 +272,9 @@ export default function LoginScreen() {
             {loading ? (
               <>
                 <ActivityIndicator size="small" color="#8DA8AC" />
-                <Text style={{ color: "#8DA8AC", fontWeight: "700", fontSize: 14 }}>Ingresando...</Text>
+                <Text style={{ color: "#8DA8AC", fontWeight: "700", fontSize: 14 }}>
+                  {wake === "waking" ? "Esperando al servidor..." : "Ingresando..."}
+                </Text>
               </>
             ) : (
               <Text style={{ color: "#04211D", fontWeight: "700", fontSize: 14 }}>Iniciar sesión</Text>

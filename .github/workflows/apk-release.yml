@@ -1,0 +1,68 @@
+# En cada merge a main compila la APK de Android con EAS Build (perfil "apk" de
+# eas.json, contra producción) y la publica como Release de GitHub. También se
+# puede correr a mano desde la pestaña Actions.
+#
+# Requiere el secreto EXPO_TOKEN (expo.dev → Access tokens) en el repo.
+name: APK de Android
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Dos merges seguidos: solo importa la APK del último. Cancelar acá no frena la
+# build que ya arrancó en EAS, pero evita publicar un Release viejo.
+concurrency:
+  group: apk-release
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # EAS CLI resuelve los config plugins de app.json, así que necesita node_modules.
+      - run: npm ci
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Compilar en EAS
+        id: build
+        run: |
+          eas build --platform android --profile apk --non-interactive --wait --json \
+            --message "${{ github.sha }}" > build.json
+          url=$(jq -r '.[0].artifacts.buildUrl' build.json)
+          if [ -z "$url" ] || [ "$url" = "null" ]; then
+            echo "EAS no devolvió la URL de la APK" >&2
+            cat build.json >&2
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "page=https://expo.dev/accounts/$(jq -r '.[0].app.ownerAccount.name' build.json)/projects/$(jq -r '.[0].app.slug' build.json)/builds/$(jq -r '.[0].id' build.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Publicar Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short=$(git rev-parse --short HEAD)
+          curl -fsSL "${{ steps.build.outputs.url }}" -o "discordia-${short}.apk"
+          gh release create "apk-${{ github.run_number }}" "discordia-${short}.apk" \
+            --target "${{ github.sha }}" \
+            --title "APK #${{ github.run_number }} (${short})" \
+            --notes "APK de Android compilada desde ${{ github.sha }}, contra producción.
+
+          Build en EAS: ${{ steps.build.outputs.page }}" \
+            --latest

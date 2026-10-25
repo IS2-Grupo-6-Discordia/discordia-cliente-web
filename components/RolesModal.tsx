@@ -102,6 +102,11 @@ export default function RolesModal({
   const [reordering, setReordering] = useState(false)
   const [order, setOrder] = useState<ServerRole[]>([])
 
+  // Deletion is irreversible, so the trash tap arms an inline confirmation for
+  // that row instead of deleting immediately. `pendingDeleteId` is the role
+  // awaiting confirmation (one at a time).
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+
   useEffect(() => {
     if (!visible) {
       setCreating(false)
@@ -110,6 +115,7 @@ export default function RolesModal({
       setDraftPerms([])
       setReordering(false)
       setOrder([])
+      setPendingDeleteId(null)
     }
   }, [visible])
 
@@ -442,7 +448,7 @@ export default function RolesModal({
                     </PressableScale>
                   ) : null}
                   <PressableScale
-                    onPress={() => onDelete(role)}
+                    onPress={() => setPendingDeleteId(role.id)}
                     disabled={reason !== "" || busy}
                     accessibilityLabel={`Eliminar rol ${role.name}`}
                     hoverStyle={reason ? undefined : { backgroundColor: "rgba(255,127,114,0.22)" }}
@@ -463,6 +469,57 @@ export default function RolesModal({
                     )}
                   </PressableScale>
                 </View>
+
+                {/* CA1: explicit confirmation before deleting — deletion is
+                    irreversible (members lose the role's permissions). Shown
+                    inline so we don't stack a second modal over this one. */}
+                {pendingDeleteId === role.id ? (
+                  <View style={{ paddingBottom: 12, gap: 10 }}>
+                    <Text style={{ color: "#8DA8AC", fontSize: 12.5, lineHeight: 18 }}>
+                      ¿Eliminar el rol{" "}
+                      <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>{role.name}</Text>? Los
+                      miembros que lo tengan van a perder los permisos que otorga. Esta acción no se
+                      puede deshacer.
+                    </Text>
+                    <View style={{ flexDirection: "row", gap: 8 }}>
+                      <PressableScale
+                        onPress={() => {
+                          onDelete(role)
+                          setPendingDeleteId(null)
+                        }}
+                        disabled={busy}
+                        accessibilityLabel={`Confirmar eliminación del rol ${role.name}`}
+                        style={{
+                          flex: 1,
+                          borderRadius: 10,
+                          paddingVertical: 11,
+                          alignItems: "center",
+                          backgroundColor: "#FF7F72",
+                          opacity: busy ? 0.6 : 1,
+                        }}
+                      >
+                        {busy ? (
+                          <ActivityIndicator color="#04211D" size="small" />
+                        ) : (
+                          <Text style={{ color: "#04211D", fontWeight: "700", fontSize: 14 }}>
+                            Eliminar
+                          </Text>
+                        )}
+                      </PressableScale>
+                      <PressableScale
+                        onPress={() => setPendingDeleteId(null)}
+                        disabled={busy}
+                        accessibilityLabel="Cancelar eliminación del rol"
+                        hoverStyle={{ backgroundColor: "rgba(255,255,255,0.08)" }}
+                        style={SECONDARY_BTN}
+                      >
+                        <Text style={{ color: "#8DA8AC", fontSize: 14, fontWeight: "600" }}>
+                          Cancelar
+                        </Text>
+                      </PressableScale>
+                    </View>
+                  </View>
+                ) : null}
 
                 {/* HU-2: permission toggles for the open role, Spanish-labelled. */}
                 {editing ? (

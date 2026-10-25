@@ -37,7 +37,22 @@ export interface Server {
   unread?: boolean
   mention?: number
   iconUrl?: string | null
+  bannerUrl?: string | null
   ownerId?: string
+}
+
+// A real role from the servers backend (GET /servers/{id}/roles), distinct from
+// `RoleGroup` (the demo roster grouping). `permissions` is the backend's own
+// free-form permission list; the admin permission is the string `administrator`.
+// `isDefault` is resolved client-side against the server's default role so the
+// UI can block its deletion (HU-5 / #92), which the backend rejects with 409.
+export interface ServerRole {
+  id: string
+  serverId: string
+  name: string
+  permissions: string[]
+  position: number
+  isDefault?: boolean
 }
 
 // A real server member, from the servers backend (user id + role) hydrated with
@@ -51,6 +66,16 @@ export interface ServerMember {
   avatarUrl: string | null
   status: PresenceStatus
   joinedAt: string
+}
+
+// HU-7: a per-channel permission overwrite for a role. `allow`/`deny` carry the
+// backend's own permission tokens; a permission listed in neither is inherited
+// (the role's normal server-level permission applies). `roleId` maps the
+// backend's snake_case `role_id`.
+export interface ChannelOverwrite {
+  roleId: string
+  allow: string[]
+  deny: string[]
 }
 
 export type TransferStatus = "pending" | "accepted" | "rejected" | "cancelled"

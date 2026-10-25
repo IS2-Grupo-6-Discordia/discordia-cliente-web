@@ -99,6 +99,14 @@ async function main() {
     process.env.SERVERS_READYZ_URL ?? "https://microservicio-servidores.onrender.com/readyz"
   if (serversReadyz) targets.push({ label: "servidores + db", url: serversReadyz })
 
+  // The voice microservice is also a separate Render free-tier service that hibernates, and its
+  // only gateway route requires a JWT, so it can't be warmed through the gateway. We hit its
+  // Render URL directly: /readyz responds 200 unauthenticated and wakes the process.
+  // Override with VOZ_READYZ_URL.
+  const vozReadyz =
+    process.env.VOZ_READYZ_URL ?? "https://microservicio-canales-de-voz.onrender.com/readyz"
+  if (vozReadyz) targets.push({ label: "voz", url: vozReadyz })
+
   // Extra targets (e.g. the servidores microservice /health direct URL) can be added without
   // touching this file: WARMUP_EXTRA_URLS="https://host-a/health,https://host-b/health".
   const extra = (process.env.WARMUP_EXTRA_URLS ?? "")

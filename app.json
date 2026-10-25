@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Discordia",
-    "slug": "discordia-app",
+    "slug": "discordia-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "discordia",
@@ -14,7 +14,21 @@
       "adaptiveIcon": {
         "backgroundColor": "#0A1620"
       },
-      "package": "com.discordia.app"
+      "package": "com.discordia.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "discordia-cliente-web.vercel.app",
+              "pathPrefix": "/invite"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -22,7 +36,21 @@
     "plugins": [
       "expo-router",
       "expo-font",
-      "expo-asset"
-    ]
+      "expo-asset",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "f459e802-fd86-4063-b49c-201875eea4f4"
+      }
+    },
+    "owner": "rbrunodevs-team"
   }
 }

@@ -48,9 +48,12 @@ import {
   getMemberRoles,
   assignRoleToMember,
   removeRoleFromMember,
+  getChannelOverwrites,
+  setChannelOverwrite,
+  deleteChannelOverwrite,
   ADMIN_PERMISSION,
 } from "@/api"
-import type { Server, Category, RoleGroup, ServerRole, Member, ServerMember, Message, Invite, OwnershipTransfer } from "@/api/types"
+import type { Server, Category, RoleGroup, ServerRole, Member, ServerMember, Message, Invite, OwnershipTransfer, ChannelOverwrite } from "@/api/types"
 import { ApiError, friendlyError } from "@/api/client"
 import { useAuth } from "@/context/AuthContext"
 import { Ionicons } from "@expo/vector-icons"
@@ -62,6 +65,7 @@ import DeleteServerModal from "@/components/DeleteServerModal"
 import ServerSettingsModal from "@/components/ServerSettingsModal"
 import RolesModal from "@/components/RolesModal"
 import MemberRolesModal from "@/components/MemberRolesModal"
+import ChannelPermissionsModal from "@/components/ChannelPermissionsModal"
 
 const SERVER_NAME_MAX = 100
 
@@ -72,6 +76,23 @@ const UUID_RE =
 
 function isRealServerId(id: string): boolean {
   return UUID_RE.test(id)
+}
+
+// HU-7: maps a channel-overwrite API failure to a user-safe Spanish message.
+// 403: lacking permission (or changing a permission you don't hold). 404: the
+// channel or role no longer exists. 422: the permission isn't valid for a
+// channel. Anything else falls back to the shared friendlyError mapping.
+function channelOverwriteError(err: unknown): string {
+  if (err instanceof ApiError && err.status === 403) {
+    return "No tenés permisos para cambiar los permisos de este canal o alguno de esos permisos."
+  }
+  if (err instanceof ApiError && err.status === 404) {
+    return "El canal o el rol ya no existe."
+  }
+  if (err instanceof ApiError && err.status === 422) {
+    return "Alguno de los permisos no es válido para un canal."
+  }
+  return friendlyError(err)
 }
 
 // HU-2 (CA1): invite configuration options. Values are what the backend expects:
@@ -307,6 +328,18 @@ export default function ChatScreen() {
   const [memberRolesLoading, setMemberRolesLoading] = useState(false)
   const [memberRolesError, setMemberRolesError] = useState("")
   const [memberRoleBusyId, setMemberRoleBusyId] = useState("")
+
+  // HU-7: per-channel role permission overrides. Admin-gated (same canAdministrate
+  // condition as the role manager). The channel being edited (editChTarget) is the
+  // target; `channelOverwrites` is the channel's loaded overwrites and
+  // `channelPermsList` every server role.
+  const [channelPermsOpen, setChannelPermsOpen] = useState(false)
+  const [channelPermsTarget, setChannelPermsTarget] = useState<{ id: string; name: string } | null>(null)
+  const [channelPermsList, setChannelPermsList] = useState<ServerRole[]>([])
+  const [channelOverwrites, setChannelOverwrites] = useState<ChannelOverwrite[]>([])
+  const [channelPermsLoading, setChannelPermsLoading] = useState(false)
+  const [channelPermsError, setChannelPermsError] = useState("")
+  const [channelPermsBusyId, setChannelPermsBusyId] = useState("")
 
   // Admin permissions the current user holds in the active server, flattened
   // from the backend's own role permissions (HU-4/HU-5 gating). Empty when the
@@ -818,6 +851,84 @@ export default function ChatScreen() {
       return false
     } finally {
       setMemberRoleBusyId("")
+    }
+  }
+
+  // HU-7: open the per-channel permission editor for the channel being edited.
+  // Loads every server role plus the channel's current overwrites (so each role's
+  // three-state selectors pre-fill), mirroring openRoles/openMemberRoles. Mock
+  // servers have no real channels, so the editor opens empty.
+  const openChannelPerms = async () => {
+    if (!editChTarget) return
+    setChannelPermsTarget({ id: editChTarget.id, name: editChTarget.name })
+    setChannelPermsOpen(true)
+    setChannelPermsError("")
+    setChannelPermsBusyId("")
+    setChannelPermsList([])
+    setChannelOverwrites([])
+    if (!isRealServerId(activeServer)) return
+    setChannelPermsLoading(true)
+    try {
+      const [rolesList, overwrites] = await Promise.all([
+        getServerRoles(activeServer),
+        getChannelOverwrites(activeServer, editChTarget.id),
+      ])
+      setChannelPermsList(rolesList)
+      setChannelOverwrites(overwrites)
+    } catch (err) {
+      setChannelPermsError(friendlyError(err))
+      setChannelPermsList([])
+    } finally {
+      setChannelPermsLoading(false)
+    }
+  }
+
+  // HU-7: create/replace a role's overwrite for the open channel with the COMPLETE
+  // allow/deny lists. The backend deletes the overwrite when both are empty, so
+  // the local list drops the role in that case and upserts it otherwise (no
+  // reload). Returns true on success so the modal collapses the editor; false
+  // (403/404/422/other) so it reverts the draft to the role's loaded state.
+  const handleSaveChannelOverwrite = async (
+    role: ServerRole,
+    allow: string[],
+    deny: string[],
+  ): Promise<boolean> => {
+    if (!channelPermsTarget) return false
+    setChannelPermsBusyId(role.id)
+    setChannelPermsError("")
+    try {
+      await setChannelOverwrite(activeServer, channelPermsTarget.id, role.id, allow, deny)
+      setChannelOverwrites((prev) => {
+        const rest = prev.filter((o) => o.roleId !== role.id)
+        // Both empty -> the backend deleted the overwrite; drop it locally too.
+        if (allow.length === 0 && deny.length === 0) return rest
+        return [...rest, { roleId: role.id, allow, deny }]
+      })
+      return true
+    } catch (err) {
+      setChannelPermsError(channelOverwriteError(err))
+      return false
+    } finally {
+      setChannelPermsBusyId("")
+    }
+  }
+
+  // HU-7: drop a role's overwrite for the open channel (back to all-inherit). On
+  // success the role leaves the local overwrites list (no reload). Returns true on
+  // success so the modal collapses the editor; false so it stays open.
+  const handleRemoveChannelOverwrite = async (role: ServerRole): Promise<boolean> => {
+    if (!channelPermsTarget) return false
+    setChannelPermsBusyId(role.id)
+    setChannelPermsError("")
+    try {
+      await deleteChannelOverwrite(activeServer, channelPermsTarget.id, role.id)
+      setChannelOverwrites((prev) => prev.filter((o) => o.roleId !== role.id))
+      return true
+    } catch (err) {
+      setChannelPermsError(channelOverwriteError(err))
+      return false
+    } finally {
+      setChannelPermsBusyId("")
     }
   }
 
@@ -2506,6 +2617,30 @@ export default function ChatScreen() {
             <Text style={PRIMARY_TXT}>Guardar</Text>
           )}
         </PressableScale>
+
+        {/* HU-7: per-channel role permission overrides. Admin-only (same
+            canAdministrate gate as the role manager); opens its own modal for the
+            channel being edited so this one never grows a big inline editor. */}
+        {canAdministrate && editChTarget ? (
+          <PressableScale
+            onPress={openChannelPerms}
+            accessibilityLabel="Configurar permisos por rol de este canal"
+            hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              paddingVertical: 11,
+              borderRadius: 10,
+              marginTop: 10,
+              backgroundColor: "rgba(55,214,192,0.12)",
+            }}
+          >
+            <Ionicons name="options-outline" size={16} color="#37D6C0" />
+            <Text style={{ color: "#37D6C0", fontSize: 13, fontWeight: "700" }}>Permisos por rol</Text>
+          </PressableScale>
+        ) : null}
       </ModalShell>
 
       {/* Create-channel modal */}
@@ -2707,6 +2842,21 @@ export default function ChatScreen() {
         busyRoleId={memberRoleBusyId}
         onClose={() => setMemberRolesOpen(false)}
         onToggle={handleToggleMemberRole}
+      />
+
+      {/* HU-7: per-channel role permission overrides */}
+      <ChannelPermissionsModal
+        visible={channelPermsOpen}
+        channelName={channelPermsTarget?.name ?? ""}
+        roles={channelPermsList}
+        overwrites={channelOverwrites}
+        loading={channelPermsLoading}
+        error={channelPermsError}
+        busyRoleId={channelPermsBusyId}
+        canAdministrate={canAdministrate}
+        onClose={() => setChannelPermsOpen(false)}
+        onSave={handleSaveChannelOverwrite}
+        onRemove={handleRemoveChannelOverwrite}
       />
 
       {/* Transfer ownership (HU-7) */}

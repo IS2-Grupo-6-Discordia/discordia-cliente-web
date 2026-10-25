@@ -1,7 +1,7 @@
 import { File as NativeFile } from "expo-file-system"
 import { getUsersBatch } from "./auth"
 import { api, apiUpload, ApiError } from "./client"
-import type { Server, Category, RoleGroup, ServerRole, Invite, ServerMember, OwnershipTransfer } from "./types"
+import type { Server, Category, RoleGroup, ServerRole, Invite, ServerMember, OwnershipTransfer, ChannelOverwrite } from "./types"
 
 // The backend's admin permission string, surfaced in each RoleOut.permissions[].
 // The UI reads it to decide whether to show admin-only actions (banner config,
@@ -506,6 +506,78 @@ export async function createChannel(
   return api<BackendChannel>(`/servers/${serverId}/channels`, {
     method: "POST",
     body: JSON.stringify(data),
+  })
+}
+
+// ---- HU-7: per-channel role permission overrides ----------------------------
+
+// A channel overwrite as returned by the backend (snake_case `role_id`).
+interface BackendChannelOverwrite {
+  role_id: string
+  allow: string[]
+  deny: string[]
+}
+
+function toChannelOverwrite(backend: BackendChannelOverwrite): ChannelOverwrite {
+  return { roleId: backend.role_id, allow: backend.allow, deny: backend.deny }
+}
+
+// HU-7: list every role's permission overwrite for a channel. A role with no
+// overwrite simply isn't in the list (its permissions are fully inherited).
+// `channelId` is the real backend channel id (the same one updateChannel uses).
+export async function getChannelOverwrites(
+  serverId: string,
+  channelId: string,
+): Promise<ChannelOverwrite[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(400)
+    return []
+  }
+  const res = await api<BackendChannelOverwrite[]>(
+    `/servers/${serverId}/channels/${channelId}/overwrites`,
+  )
+  return res.map(toChannelOverwrite)
+}
+
+// HU-7: create or replace a role's overwrite for a channel. The backend replaces
+// the whole allow/deny pair, so the COMPLETE desired lists are always sent. When
+// BOTH lists are empty the backend deletes the overwrite (the role goes back to
+// fully inheriting). Admin-only — the backend answers 403 when the caller lacks
+// permission (or grants/denies a permission they don't hold), 404 when the
+// channel or role no longer exists, and 422 when a permission isn't valid for a
+// channel. The response body (the stored overwrite) isn't read back: the caller
+// already holds the computed allow/deny it just sent.
+export async function setChannelOverwrite(
+  serverId: string,
+  channelId: string,
+  roleId: string,
+  allow: string[],
+  deny: string[],
+): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+  await api<void>(`/servers/${serverId}/channels/${channelId}/overwrites/${roleId}`, {
+    method: "PUT",
+    body: JSON.stringify({ allow, deny }),
+  })
+}
+
+// HU-7: remove a role's overwrite for a channel (DELETE → 204, idempotent). The
+// role goes back to fully inheriting its server-level permissions. Same admin/403
+// rules as setChannelOverwrite.
+export async function deleteChannelOverwrite(
+  serverId: string,
+  channelId: string,
+  roleId: string,
+): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+  await api<void>(`/servers/${serverId}/channels/${channelId}/overwrites/${roleId}`, {
+    method: "DELETE",
   })
 }
 

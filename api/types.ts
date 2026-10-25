@@ -68,6 +68,16 @@ export interface ServerMember {
   joinedAt: string
 }
 
+// HU-7: a per-channel permission overwrite for a role. `allow`/`deny` carry the
+// backend's own permission tokens; a permission listed in neither is inherited
+// (the role's normal server-level permission applies). `roleId` maps the
+// backend's snake_case `role_id`.
+export interface ChannelOverwrite {
+  roleId: string
+  allow: string[]
+  deny: string[]
+}
+
 export type TransferStatus = "pending" | "accepted" | "rejected" | "cancelled"
 
 // HU-7: an ownership transfer between the current owner (from) and a member (to).

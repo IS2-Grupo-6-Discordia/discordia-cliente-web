@@ -371,31 +371,40 @@ export async function deleteServer(serverId: string, confirmationName: string): 
 // PATCH with a single `banner` file field, mirroring how createServer uploads
 // the icon. Returns the updated server so the new banner shows for everyone once
 // it persists (CA1). `banner` is a web Blob or a native file descriptor.
-export async function updateServerBanner(
+type ServerImageUpload = Blob | { uri: string; name: string; type: string }
+
+// HU-4: edit the server's general settings (name, icon and/or banner) in a
+// single PATCH. Only the fields that are passed get sent; the backend rejects
+// an empty patch with 422, so the caller must send at least one.
+export async function updateServer(
   serverId: string,
-  banner: Blob | { uri: string; name: string; type: string },
+  fields: { name?: string; icon?: ServerImageUpload; banner?: ServerImageUpload },
 ): Promise<Server> {
   if (WRITE_USE_MOCK) {
     await mockDelay()
     const existing = MOCK_SERVERS.find((s) => s.id === serverId)
-    const name = existing?.name ?? "Servidor"
+    const name = fields.name ?? existing?.name ?? "Servidor"
+    const blobUrl = (img?: ServerImageUpload) =>
+      img && typeof URL !== "undefined" && img instanceof Blob ? URL.createObjectURL(img) : null
     return {
       id: serverId,
       name,
       abbr: abbrFor(name),
       color: colorFor(serverId),
-      iconUrl: existing?.iconUrl ?? null,
-      bannerUrl:
-        typeof URL !== "undefined" && banner instanceof Blob ? URL.createObjectURL(banner) : null,
+      iconUrl: blobUrl(fields.icon) ?? existing?.iconUrl ?? null,
+      bannerUrl: blobUrl(fields.banner) ?? existing?.bannerUrl ?? null,
     }
   }
 
   const fd = new FormData()
-  if (banner instanceof Blob) {
-    fd.append("banner", banner, "banner")
-  } else {
-    fd.append("banner", new NativeFile(banner.uri) as any)
+  if (fields.name !== undefined) fd.append("name", fields.name)
+  const appendImage = (field: string, img?: ServerImageUpload) => {
+    if (!img) return
+    if (img instanceof Blob) fd.append(field, img, field)
+    else fd.append(field, new NativeFile(img.uri) as any)
   }
+  appendImage("icon", fields.icon)
+  appendImage("banner", fields.banner)
   const res = await apiUpload<BackendServerSummary>("/servers/" + serverId, fd, "PATCH")
   return toServer(res)
 }

@@ -36,7 +36,7 @@ import {
   getPendingTransfer,
   acceptOwnershipTransfer,
   rejectOwnershipTransfer,
-  updateServerBanner,
+  updateServer,
   getServerRoles,
   getDefaultRoleId,
   setDefaultRole,
@@ -476,6 +476,7 @@ export default function ChatScreen() {
 
   const activeServerName = servers.find((s) => s.id === activeServer)?.name ?? ""
   const activeServerBannerUrl = servers.find((s) => s.id === activeServer)?.bannerUrl ?? null
+  const activeServerIconUrl = servers.find((s) => s.id === activeServer)?.iconUrl ?? null
 
   // Admin of the active server: the owner always qualifies; a non-owner member
   // qualifies when the backend grants them the `administrator` permission. Gates
@@ -587,21 +588,28 @@ export default function ChatScreen() {
     setSettingsOpen(true)
   }
 
-  const handleSaveBanner = async (
-    banner: Blob | { uri: string; name: string; type: string },
-  ) => {
+  const handleSaveSettings = async (fields: {
+    name?: string
+    icon?: Blob | { uri: string; name: string; type: string }
+    banner?: Blob | { uri: string; name: string; type: string }
+  }) => {
     setSettingsBusy(true)
     setSettingsError("")
     try {
-      const updated = await updateServerBanner(activeServer, banner)
-      // Reflect the new banner for everyone in the rail-backed server list (CA1).
-      setServers((prev) => prev.map((s) => (s.id === updated.id ? { ...s, bannerUrl: updated.bannerUrl } : s)))
+      const updated = await updateServer(activeServer, fields)
+      // Reflect the new name/icon/banner for everyone in the server list (CA1).
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === updated.id
+            ? { ...s, name: updated.name, abbr: updated.abbr, iconUrl: updated.iconUrl, bannerUrl: updated.bannerUrl }
+            : s,
+        ),
+      )
       setSettingsOpen(false)
     } catch (err) {
-      // 422 = unsupported format/size; the backend persisted nothing (CA3).
-      if (err instanceof ApiError && err.status === 422) {
-        setSettingsError("Ese archivo no sirve como banner. Probá con otra imagen (formato o tamaño no soportado).")
-      } else if (err instanceof ApiError && err.status === 503) {
+      // 422 = empty patch or invalid name/image; the backend persisted nothing (CA3).
+      // Its Spanish detail is specific (name vs image), so surface it via friendlyError.
+      if (err instanceof ApiError && err.status === 503) {
         setSettingsError("El almacenamiento de imágenes no está disponible ahora. Probá de nuevo en un rato.")
       } else {
         setSettingsError(friendlyError(err))
@@ -2801,11 +2809,12 @@ export default function ChatScreen() {
       <ServerSettingsModal
         visible={settingsOpen}
         serverName={activeServerName}
+        currentIconUrl={activeServerIconUrl}
         currentBannerUrl={activeServerBannerUrl}
         busy={settingsBusy}
         error={settingsError}
         onClose={() => setSettingsOpen(false)}
-        onSave={handleSaveBanner}
+        onSave={handleSaveSettings}
       />
 
       {/* HU-5 (#92): role manager */}

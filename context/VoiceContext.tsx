@@ -5,7 +5,7 @@ import { joinVoiceChannel } from "@/api/voice"
 import { getUsersBatch, initials } from "@/api/auth"
 import { friendlyError } from "@/api/client"
 import { useAuth } from "@/context/AuthContext"
-import { connectVoiceRoom, MicrophoneError, voiceSupported } from "@/lib/voiceRoom"
+import { connectVoiceRoom, MicrophoneError, VoiceAbortedError, voiceSupported } from "@/lib/voiceRoom"
 import type { VoiceRoomHandle, VoiceRoomParticipant, VoiceDropReason } from "@/lib/voiceRoom"
 
 // HU-17: one voice connection per session, shared by the channel list (chat)
@@ -38,8 +38,10 @@ interface VoiceState {
   // Set when the room dropped on its own (not through leave()).
   dropNotice: string
   clearDropNotice: () => void
-  // Resolves once connected; rejects with a user-facing Spanish message.
+  // Resolves once connected (or silently if leave() cancelled it); rejects
+  // with a user-facing Spanish message.
   join: (channel: VoiceChannelRef) => Promise<void>
+  // HU-18: hangs up, also mid-connect. LiveKit tells the others we left.
   leave: () => Promise<void>
 }
 
@@ -72,6 +74,8 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
   // the state of the one that replaced it.
   const attemptRef = useRef(0)
   const busyRef = useRef(false)
+  // Aborts the LiveKit connect of the attempt in flight, if any.
+  const abortRef = useRef<AbortController | null>(null)
 
   const reset = useCallback(() => {
     handleRef.current = null
@@ -112,8 +116,11 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         setChannel(target)
         setRoomParticipants([])
 
+        const abort = new AbortController()
+        abortRef.current = abort
         try {
           const handle = await connectVoiceRoom(access.url, access.token, {
+            signal: abort.signal,
             onParticipants: (list) => {
               if (attemptRef.current === attempt) setRoomParticipants(list)
             },
@@ -130,11 +137,16 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
           handleRef.current = handle
           setStatus("connected")
         } catch (err) {
-          if (attemptRef.current === attempt) reset()
+          // Cancelled by leave() or replaced by a newer join: nothing to report.
+          if (err instanceof VoiceAbortedError || attemptRef.current !== attempt) return
+          reset()
           throw new Error(joinErrorMessage(err))
+        } finally {
+          if (abortRef.current === abort) abortRef.current = null
         }
       } finally {
-        busyRef.current = false
+        // leave() already released the lock for the next join.
+        if (attemptRef.current === attempt) busyRef.current = false
       }
     },
     [reset],
@@ -142,6 +154,9 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
 
   const leave = useCallback(async () => {
     attemptRef.current++
+    busyRef.current = false
+    abortRef.current?.abort()
+    abortRef.current = null
     const handle = handleRef.current
     reset()
     if (handle) await handle.disconnect()
@@ -151,6 +166,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
   // LiveKit session keeps billing minutes and keeps us listed in the room.
   useEffect(() => {
     const hangUp = () => {
+      abortRef.current?.abort()
       handleRef.current?.disconnect().catch(() => undefined)
       handleRef.current = null
     }

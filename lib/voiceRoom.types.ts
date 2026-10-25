@@ -19,6 +19,16 @@ export type VoiceDropReason =
 export interface VoiceRoomEvents {
   onParticipants: (participants: VoiceRoomParticipant[]) => void
   onDropped: (reason: VoiceDropReason) => void
+  // HU-18: aborting it while connecting tears the room down right away, so
+  // "Desconectar" works before the call is fully up.
+  signal?: AbortSignal
+}
+
+// Thrown by connectVoiceRoom when `signal` aborted the attempt.
+export class VoiceAbortedError extends Error {
+  constructor() {
+    super("voice-aborted")
+  }
 }
 
 export interface VoiceRoomHandle {

@@ -708,6 +708,8 @@ export default function ChatScreen() {
     setDeleteChError("")
     try {
       await deleteChannel(activeServer, deleteChTarget.id)
+      // HU-18: the room is gone for us too; don't keep a call to a dead channel.
+      if (voice.channel?.id === deleteChTarget.id) await voice.leave()
       setCategories((prev) =>
         prev.map((cat) => ({
           ...cat,
@@ -889,6 +891,8 @@ export default function ChatScreen() {
     setLeaveBusy(true)
     try {
       await leaveServer(activeServer)
+      // HU-18: without membership we can't stay in its voice channels.
+      if (voice.channel?.serverId === activeServer) await voice.leave()
       const remaining = servers.filter((s) => s.id !== activeServer)
       setServers((prev) => prev.filter((s) => s.id !== activeServer))
       if (remaining.length > 0) {

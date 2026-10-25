@@ -24,7 +24,13 @@
       "expo-font",
       "expo-asset",
       "@livekit/react-native-expo-plugin",
-      "@config-plugins/react-native-webrtc"
+      "@config-plugins/react-native-webrtc",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.357428623304-lnu4vkc3psjuocv2m984ic4tqglbpfes"
+        }
+      ]
     ],
     "extra": {
       "eas": {

@@ -280,8 +280,15 @@ export default function RolesModal({
 
       {/* HU-6: enter reorder mode. Shown only to someone who can manage roles
           (the exact same canAdministrate gate the parent uses to open this
-          modal), when there are roles and nothing else is mid-edit. */}
-      {!reordering && canAdministrate && roles.length > 0 && !creating && editingId === null ? (
+          modal), when there are roles and nothing else is mid-edit. Hidden for a
+          non-owner who holds no non-default role (ownRolePosition == null), since
+          every row would be locked and they could not move anything. */}
+      {!reordering &&
+      canAdministrate &&
+      (isOwner || ownRolePosition != null) &&
+      roles.length > 0 &&
+      !creating &&
+      editingId === null ? (
         <PressableScale
           onPress={enterReorder}
           accessibilityLabel="Reordenar la jerarquía de roles"

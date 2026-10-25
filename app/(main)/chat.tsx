@@ -51,6 +51,7 @@ import {
   getChannelOverwrites,
   setChannelOverwrite,
   deleteChannelOverwrite,
+  getRoleMembers,
   ADMIN_PERMISSION,
 } from "@/api"
 import type { Server, Category, RoleGroup, ServerRole, Member, ServerMember, Message, Invite, OwnershipTransfer, ChannelOverwrite } from "@/api/types"
@@ -65,6 +66,7 @@ import DeleteServerModal from "@/components/DeleteServerModal"
 import ServerSettingsModal from "@/components/ServerSettingsModal"
 import RolesModal from "@/components/RolesModal"
 import MemberRolesModal from "@/components/MemberRolesModal"
+import RoleMembersModal from "@/components/RoleMembersModal"
 import ChannelPermissionsModal from "@/components/ChannelPermissionsModal"
 
 const SERVER_NAME_MAX = 100
@@ -91,6 +93,19 @@ function channelOverwriteError(err: unknown): string {
   }
   if (err instanceof ApiError && err.status === 422) {
     return "Alguno de los permisos no es válido para un canal."
+  }
+  return friendlyError(err)
+}
+
+// HU-8: maps a "ver miembros por rol" API failure to a user-safe Spanish
+// message. 403: not a member or lacking MANAGE_ROLES. 404: the role (or server)
+// no longer exists. Anything else falls back to the shared friendlyError mapping.
+function viewRoleMembersError(err: unknown): string {
+  if (err instanceof ApiError && err.status === 403) {
+    return "No tenés permisos para ver los miembros de este rol."
+  }
+  if (err instanceof ApiError && err.status === 404) {
+    return "El rol ya no existe."
   }
   return friendlyError(err)
 }
@@ -328,6 +343,15 @@ export default function ChatScreen() {
   const [memberRolesLoading, setMemberRolesLoading] = useState(false)
   const [memberRolesError, setMemberRolesError] = useState("")
   const [memberRoleBusyId, setMemberRoleBusyId] = useState("")
+
+  // HU-8: read-only "ver miembros por rol" list. Admin-gated (same condition as
+  // the role manager). `roleMembersTarget` is the role being inspected (id+name);
+  // `roleMembersList` is the loaded members that have it.
+  const [roleMembersOpen, setRoleMembersOpen] = useState(false)
+  const [roleMembersTarget, setRoleMembersTarget] = useState<{ id: string; name: string } | null>(null)
+  const [roleMembersList, setRoleMembersList] = useState<ServerMember[]>([])
+  const [roleMembersLoading, setRoleMembersLoading] = useState(false)
+  const [roleMembersError, setRoleMembersError] = useState("")
 
   // HU-7: per-channel role permission overrides. Admin-gated (same canAdministrate
   // condition as the role manager). The channel being edited (editChTarget) is the
@@ -825,6 +849,27 @@ export default function ChatScreen() {
       setMemberRolesList([])
     } finally {
       setMemberRolesLoading(false)
+    }
+  }
+
+  // HU-8: open the read-only "ver miembros por rol" list. Loads the members that
+  // have the role, mirroring openRoles/openMemberRoles. Mock servers have no real
+  // roles, so the list opens empty.
+  const openRoleMembers = async (role: ServerRole) => {
+    setRoleMembersOpen(true)
+    setRoleMembersTarget({ id: role.id, name: role.name })
+    setRoleMembersError("")
+    setRoleMembersList([])
+    if (!isRealServerId(activeServer)) return
+    setRoleMembersLoading(true)
+    try {
+      const members = await getRoleMembers(activeServer, role.id)
+      setRoleMembersList(members)
+    } catch (err) {
+      setRoleMembersError(viewRoleMembersError(err))
+      setRoleMembersList([])
+    } finally {
+      setRoleMembersLoading(false)
     }
   }
 
@@ -2838,6 +2883,17 @@ export default function ChatScreen() {
         onCreate={handleCreateRole}
         onUpdatePermissions={handleUpdateRolePermissions}
         onReorder={handleReorderRoles}
+        onViewMembers={openRoleMembers}
+      />
+
+      {/* HU-8: read-only list of members with a given role */}
+      <RoleMembersModal
+        visible={roleMembersOpen}
+        roleName={roleMembersTarget?.name ?? ""}
+        members={roleMembersList}
+        loading={roleMembersLoading}
+        error={roleMembersError}
+        onClose={() => setRoleMembersOpen(false)}
       />
 
       {/* HU-3: per-member role assignment */}

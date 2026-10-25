@@ -45,6 +45,10 @@ interface RolesModalProps {
   // order (first = position 1 = top). Resolves true on success so reorder mode
   // exits; false (403/422/other) so the local order reverts to the previous one.
   onReorder: (roleIds: string[]) => Promise<boolean>
+  // HU-8: open the read-only list of members that have this role. A row action
+  // the parent owns (it does the fetch and opens its own modal); this component
+  // only invokes it. Shown only to someone who can manage roles.
+  onViewMembers?: (role: ServerRole) => void
 }
 
 // HU-2: the backend's permission vocabulary (lowercase) paired with the Spanish
@@ -86,6 +90,7 @@ export default function RolesModal({
   onCreate,
   onUpdatePermissions,
   onReorder,
+  onViewMembers,
 }: RolesModalProps) {
   // HU-1: inline "Crear rol" input. `creating` toggles the field; `newRoleName`
   // holds its draft. Reset whenever the modal is closed so it reopens clean.
@@ -415,6 +420,27 @@ export default function RolesModal({
                       </Text>
                     </View>
                   </PressableScale>
+                  {/* HU-8: open the read-only list of members with this role,
+                      shown only to someone who can manage roles (same
+                      canAdministrate condition the parent uses to open this
+                      modal). The parent does the fetch; this only invokes it. */}
+                  {canAdministrate ? (
+                    <PressableScale
+                      onPress={() => onViewMembers?.(role)}
+                      accessibilityLabel={`Ver los miembros con el rol ${role.name}`}
+                      hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
+                      style={{
+                        width: 34,
+                        height: 34,
+                        borderRadius: 8,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        backgroundColor: "rgba(55,214,192,0.12)",
+                      }}
+                    >
+                      <Ionicons name="people-outline" size={16} color="#37D6C0" />
+                    </PressableScale>
+                  ) : null}
                   {/* HU-4: the default role shows a "Por defecto" badge; every
                       other role gets a "Marcar como por defecto" action, shown
                       only to someone who can manage roles (same canAdministrate

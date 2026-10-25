@@ -450,13 +450,13 @@ export async function getCommonServers(userId: string): Promise<Server[]> {
   return res.map(toServer)
 }
 
-export async function getServerMembers(serverId: string): Promise<ServerMember[]> {
-  if (WRITE_USE_MOCK) {
-    await mockDelay(500)
-    return []
-  }
-
-  const rows = await api<BackendServerMember[]>(`/servers/${serverId}/members`)
+// Hydrates a list of backend member rows (user id + role + joined_at) into the
+// UI `ServerMember` shape: names, avatars and statuses come from the auth
+// service in a single batch call and are merged by id. A member whose public
+// profile can't be resolved still appears, with a neutral fallback name, so the
+// list is never silently short. Shared by getServerMembers and getRoleMembers
+// so both resolve profiles identically and preserve the backend's order.
+async function toServerMembers(rows: BackendServerMember[]): Promise<ServerMember[]> {
   const profiles = await getUsersBatch(rows.map((row) => row.user_id))
   const byId = new Map(profiles.map((profile) => [profile.id, profile]))
 
@@ -473,6 +473,33 @@ export async function getServerMembers(serverId: string): Promise<ServerMember[]
       joinedAt: row.joined_at,
     }
   })
+}
+
+export async function getServerMembers(serverId: string): Promise<ServerMember[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(500)
+    return []
+  }
+
+  const rows = await api<BackendServerMember[]>(`/servers/${serverId}/members`)
+  return toServerMembers(rows)
+}
+
+// HU-8: lists the members that have a given role, so an admin can audit who has
+// access to what. The backend returns the same member shape and order as the
+// server members list (owner first, then by join date), so profiles are
+// resolved identically via toServerMembers. The backend answers 403 when the
+// caller isn't a member or lacks MANAGE_ROLES, and 404 when the server or role
+// doesn't exist (or the role belongs to another server). Empty array when
+// nobody has the role.
+export async function getRoleMembers(serverId: string, roleId: string): Promise<ServerMember[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(500)
+    return []
+  }
+
+  const rows = await api<BackendServerMember[]>(`/servers/${serverId}/roles/${roleId}/members`)
+  return toServerMembers(rows)
 }
 
 // ---- Channels: delete + update -----------------------------------------------

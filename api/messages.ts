@@ -122,11 +122,12 @@ export async function getMessages(channelId: string): Promise<Message[]> {
 export async function sendMessage(
   channelId: string,
   text: string,
+  authorName?: string,
 ): Promise<Message> {
   if (USE_MOCK) {
     const msg: Message = {
       id: Date.now().toString(),
-      author: "Facundo",
+      author: authorName || "Yo",
       color: "#37D6C0",
       time: new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }),
       text,

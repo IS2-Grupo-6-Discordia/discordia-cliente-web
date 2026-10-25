@@ -53,6 +53,7 @@ import {
   deleteChannelOverwrite,
   getRoleMembers,
   ADMIN_PERMISSION,
+  MANAGE_ROLES_PERMISSION,
 } from "@/api"
 import type { Server, Category, RoleGroup, ServerRole, Member, ServerMember, Message, Invite, OwnershipTransfer, ChannelOverwrite } from "@/api/types"
 import { ApiError, friendlyError } from "@/api/client"
@@ -510,6 +511,20 @@ export default function ChatScreen() {
     !!activeServer &&
     isRealServerId(activeServer) &&
     (isOwner || memberPermissions.includes(ADMIN_PERMISSION))
+
+  // Can manage roles: the backend lets anyone with MANAGE_ROLES (or ADMINISTRATOR,
+  // or the owner) administer roles — a wider set than canAdministrate, which only
+  // accepts the owner or ADMINISTRATOR. Gates ALL the role UI (create/edit/delete/
+  // default/reorder, assign per member, view members). Per-channel overwrites
+  // (HU-7) deliberately stay under canAdministrate: they live inside the
+  // admin-gated "Editar canal" modal, so a manage_roles-only user cannot reach
+  // them from the UI (documented limitation). Same real-server/fallback rules.
+  const canManageRoles =
+    !!activeServer &&
+    isRealServerId(activeServer) &&
+    (isOwner ||
+      memberPermissions.includes(ADMIN_PERMISSION) ||
+      memberPermissions.includes(MANAGE_ROLES_PERMISSION))
 
   // Whether the owner may offer ownership to a given member row: only the owner,
   // only on real servers, and never the owner's own row.
@@ -1652,7 +1667,7 @@ export default function ChatScreen() {
               (#97). Rendered as a separate row of uniform square icon buttons
               so they never overflow the sidebar, and only when the member can
               see at least one of them, so the row is never empty. */}
-          {canAdministrate || (isOwner && isRealServerId(activeServer)) ? (
+          {canManageRoles || (isOwner && isRealServerId(activeServer)) ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               {canAdministrate ? (
                 <PressableScale
@@ -1671,7 +1686,7 @@ export default function ChatScreen() {
                   <Ionicons name="settings-outline" size={15} color="#8DA8AC" />
                 </PressableScale>
               ) : null}
-              {canAdministrate ? (
+              {canManageRoles ? (
                 <PressableScale
                   onPress={openRoles}
                   accessibilityLabel="Roles del servidor"
@@ -2237,7 +2252,7 @@ export default function ChatScreen() {
                             that shows the Roles (shield) icon. A separate touchable
                             that stops the press from bubbling to the row's
                             tap-to-open-profile navigation. */}
-                        {canAdministrate ? (
+                        {canManageRoles ? (
                           <TouchableOpacity
                             onPress={(e) => {
                               e.stopPropagation()
@@ -2871,7 +2886,7 @@ export default function ChatScreen() {
         error={rolesError}
         busyRoleId={roleBusyId}
         defaultBusyId={roleDefaultBusyId}
-        canAdministrate={canAdministrate}
+        canManageRoles={canManageRoles}
         createBusy={roleCreateBusy}
         updateBusy={roleUpdateBusy}
         reorderBusy={roleReorderBusy}

@@ -8,6 +8,11 @@ import type { Server, Category, RoleGroup, ServerRole, Invite, ServerMember, Own
 // role management); it is the backend's own vocabulary, not invented here.
 export const ADMIN_PERMISSION = "administrator"
 
+// The backend's "manage roles" permission string. A member who holds it (even
+// without ADMINISTRATOR) may administer roles, so the UI reads it to decide
+// whether to surface role management.
+export const MANAGE_ROLES_PERMISSION = "manage_roles"
+
 // Reads always stay mocked: the backend does NOT expose GET /servers,
 // GET categories, or GET roles endpoints yet, so there is nothing to call.
 const READ_USE_MOCK = false

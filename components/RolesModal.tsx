@@ -16,9 +16,10 @@ interface RolesModalProps {
   busyRoleId?: string
   // HU-4: the role whose "Marcar como por defecto" action is mid-request.
   defaultBusyId?: string
-  // HU-4: whether the current user can manage roles. Reuses the parent's
-  // `canAdministrate` memo so the set-default action never invents its own check.
-  canAdministrate?: boolean
+  // Whether the current user can manage roles. Reuses the parent's
+  // `canManageRoles` memo (owner / ADMINISTRATOR / MANAGE_ROLES) so every role
+  // action here uses the same check the parent uses to open this modal.
+  canManageRoles?: boolean
   createBusy?: boolean
   updateBusy?: boolean
   // HU-6: the "Guardar orden" request is in flight.
@@ -78,7 +79,7 @@ export default function RolesModal({
   error = "",
   busyRoleId = "",
   defaultBusyId = "",
-  canAdministrate = false,
+  canManageRoles = false,
   createBusy = false,
   updateBusy = false,
   reorderBusy = false,
@@ -290,12 +291,12 @@ export default function RolesModal({
       ))}
 
       {/* HU-6: enter reorder mode. Shown only to someone who can manage roles
-          (the exact same canAdministrate gate the parent uses to open this
+          (the exact same canManageRoles gate the parent uses to open this
           modal), when there are roles and nothing else is mid-edit. Hidden for a
           non-owner who holds no non-default role (ownRolePosition == null), since
           every row would be locked and they could not move anything. */}
       {!reordering &&
-      canAdministrate &&
+      canManageRoles &&
       (isOwner || ownRolePosition != null) &&
       roles.length > 0 &&
       !creating &&
@@ -422,9 +423,9 @@ export default function RolesModal({
                   </PressableScale>
                   {/* HU-8: open the read-only list of members with this role,
                       shown only to someone who can manage roles (same
-                      canAdministrate condition the parent uses to open this
+                      canManageRoles condition the parent uses to open this
                       modal). The parent does the fetch; this only invokes it. */}
-                  {canAdministrate ? (
+                  {canManageRoles ? (
                     <PressableScale
                       onPress={() => onViewMembers?.(role)}
                       accessibilityLabel={`Ver los miembros con el rol ${role.name}`}
@@ -443,14 +444,14 @@ export default function RolesModal({
                   ) : null}
                   {/* HU-4: the default role shows a "Por defecto" badge; every
                       other role gets a "Marcar como por defecto" action, shown
-                      only to someone who can manage roles (same canAdministrate
+                      only to someone who can manage roles (same canManageRoles
                       condition the parent uses to open this modal). */}
                   {role.id === defaultRoleId ? (
                     <View style={DEFAULT_BADGE}>
                       <Ionicons name="star" size={11} color="#37D6C0" />
                       <Text style={DEFAULT_BADGE_TXT}>Por defecto</Text>
                     </View>
-                  ) : canAdministrate ? (
+                  ) : canManageRoles ? (
                     <PressableScale
                       onPress={() => onSetDefault(role)}
                       disabled={defaultBusyId === role.id}

@@ -66,6 +66,7 @@ import PressableScale from "@/components/PressableScale"
 import DeleteServerModal from "@/components/DeleteServerModal"
 import ServerSettingsModal from "@/components/ServerSettingsModal"
 import RolesModal from "@/components/RolesModal"
+import RolePermissionsModal from "@/components/RolePermissionsModal"
 import MemberRolesModal from "@/components/MemberRolesModal"
 import RoleMembersModal from "@/components/RoleMembersModal"
 import ChannelPermissionsModal from "@/components/ChannelPermissionsModal"
@@ -347,6 +348,10 @@ export default function ChatScreen() {
   // current user's own roles feed the client-side hierarchy helper (CA2).
   const [roleReorderBusy, setRoleReorderBusy] = useState(false)
   const [currentUserRoles, setCurrentUserRoles] = useState<ServerRole[]>([])
+  // HU-2: dedicated permission editor (drill-in from a role row). `rolePermsTarget`
+  // is the role being edited; it reuses roleUpdateBusy / rolesError for the save.
+  const [rolePermsOpen, setRolePermsOpen] = useState(false)
+  const [rolePermsTarget, setRolePermsTarget] = useState<ServerRole | null>(null)
 
   // HU-3: per-member role assignment selector. Admin-gated (same condition as
   // the role manager). `memberRolesList` is every server role; `memberAssignedIds`
@@ -879,6 +884,15 @@ export default function ChatScreen() {
     } finally {
       setMemberRolesLoading(false)
     }
+  }
+
+  // HU-2: open the dedicated permission editor for a role (drill-in from its
+  // row). The modal seeds its own draft from the role's permissions and saves
+  // through handleUpdateRolePermissions, which owns the busy/error state.
+  const openRolePermissions = (role: ServerRole) => {
+    setRolePermsTarget(role)
+    setRolesError("")
+    setRolePermsOpen(true)
   }
 
   // HU-8: open the read-only "ver miembros por rol" list. Loads the members that
@@ -1652,7 +1666,7 @@ export default function ChatScreen() {
       {!isNarrow || channelSidebarOpen ? (
       <View
         style={{
-          width: isNarrow ? Math.min(240, screenWidth - 52) : 180,
+          width: isNarrow ? Math.min(240, screenWidth - 52) : 216,
           backgroundColor: isNarrow ? "#151D23" : "rgba(255,255,255,0.055)",
           borderRightWidth: 1,
           borderRightColor: "rgba(255,255,255,0.13)",
@@ -2989,7 +3003,6 @@ export default function ChatScreen() {
         defaultBusyId={roleDefaultBusyId}
         canManageRoles={canManageRoles}
         createBusy={roleCreateBusy}
-        updateBusy={roleUpdateBusy}
         reorderBusy={roleReorderBusy}
         isOwner={isOwner}
         ownRolePosition={ownRolePosition}
@@ -2997,9 +3010,20 @@ export default function ChatScreen() {
         onDelete={handleDeleteRole}
         onSetDefault={handleSetDefaultRole}
         onCreate={handleCreateRole}
-        onUpdatePermissions={handleUpdateRolePermissions}
+        onEditPermissions={openRolePermissions}
         onReorder={handleReorderRoles}
         onViewMembers={openRoleMembers}
+      />
+
+      {/* HU-2: dedicated permission editor (drill-in from a role row) */}
+      <RolePermissionsModal
+        visible={rolePermsOpen}
+        roleName={rolePermsTarget?.name ?? ""}
+        role={rolePermsTarget}
+        busy={roleUpdateBusy}
+        error={rolesError}
+        onClose={() => setRolePermsOpen(false)}
+        onSave={handleUpdateRolePermissions}
       />
 
       {/* HU-8: read-only list of members with a given role */}

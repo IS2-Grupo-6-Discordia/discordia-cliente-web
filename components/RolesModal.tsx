@@ -1,5 +1,15 @@
-import { useEffect, useState } from "react"
-import { View, Text, TextInput, ScrollView, ActivityIndicator } from "react-native"
+import { useEffect, useRef, useState } from "react"
+import {
+  View,
+  Text,
+  TextInput,
+  ScrollView,
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  Dimensions,
+  Platform,
+} from "react-native"
 import type { ViewStyle, TextStyle } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 import { ADMIN_PERMISSION } from "@/api"
@@ -21,7 +31,6 @@ interface RolesModalProps {
   // action here uses the same check the parent uses to open this modal.
   canManageRoles?: boolean
   createBusy?: boolean
-  updateBusy?: boolean
   // HU-6: the "Guardar orden" request is in flight.
   reorderBusy?: boolean
   // HU-6 (CA2): hierarchy helper. The owner is exempt (no restriction);
@@ -38,10 +47,10 @@ interface RolesModalProps {
   // HU-1: create a role from the given name. Resolves true on success so the
   // input can clear/close; false (validation/403/409/422) leaves it as-is.
   onCreate: (name: string) => Promise<boolean>
-  // HU-2: replace a role's permission mask with the COMPLETE desired list.
-  // Resolves true on success so the editor can collapse; false (403/409/422)
-  // keeps it open and the caller reverts the toggles to the role's state.
-  onUpdatePermissions: (role: ServerRole, permissions: string[]) => Promise<boolean>
+  // HU-2: open the dedicated permission editor for a role. The parent owns the
+  // RolePermissionsModal and the API call; this component only invokes it (the
+  // permission editing no longer lives inline in a row accordion).
+  onEditPermissions: (role: ServerRole) => void
   // HU-6: persist a new hierarchy. Receives the COMPLETE id list in the displayed
   // order (first = position 1 = top). Resolves true on success so reorder mode
   // exits; false (403/422/other) so the local order reverts to the previous one.
@@ -52,25 +61,13 @@ interface RolesModalProps {
   onViewMembers?: (role: ServerRole) => void
 }
 
-// HU-2: the backend's permission vocabulary (lowercase) paired with the Spanish
-// label each toggle shows. Order is fixed so the editor always reads the same.
-const PERMISSION_OPTIONS: { key: string; label: string }[] = [
-  { key: "administrator", label: "Administrador" },
-  { key: "manage_server", label: "Gestionar servidor" },
-  { key: "manage_roles", label: "Gestionar roles" },
-  { key: "manage_channels", label: "Gestionar canales" },
-  { key: "create_invite", label: "Crear invitaciones" },
-  { key: "kick_members", label: "Expulsar miembros" },
-  { key: "ban_members", label: "Banear miembros" },
-  { key: "send_messages", label: "Enviar mensajes" },
-  { key: "connect_voice", label: "Conectarse a voz" },
-]
-
-// HU-5 (#92): role manager — lists a server's roles and lets an admin delete
-// one. The parent gates visibility to admins (CA2) and owns the list + the API
-// call. Deletion is blocked in the UI for roles the backend rejects with 409:
-// the default role, and any `administrator` role (which the caller likely holds
-// themselves). A 403/409 that still slips through is surfaced via `error`.
+// HU-5 (#92): role manager — lists a server's roles and lets an admin create,
+// reorder and manage each one. The parent gates visibility to admins (CA2) and
+// owns the list + the API calls. Each row drills into the permission editor (its
+// chevron) and exposes the rest of its actions through an overflow (⋮) menu.
+// Deletion is blocked in the UI for roles the backend rejects with 409: the
+// default role, and any `administrator` role. A 403/409 that still slips through
+// is surfaced via `error`.
 export default function RolesModal({
   visible,
   roles,
@@ -81,7 +78,6 @@ export default function RolesModal({
   defaultBusyId = "",
   canManageRoles = false,
   createBusy = false,
-  updateBusy = false,
   reorderBusy = false,
   isOwner = false,
   ownRolePosition = null,
@@ -89,7 +85,7 @@ export default function RolesModal({
   onDelete,
   onSetDefault,
   onCreate,
-  onUpdatePermissions,
+  onEditPermissions,
   onReorder,
   onViewMembers,
 }: RolesModalProps) {
@@ -98,30 +94,33 @@ export default function RolesModal({
   const [creating, setCreating] = useState(false)
   const [newRoleName, setNewRoleName] = useState("")
 
-  // HU-2: permission editor. `editingId` is the role whose toggles are open (one
-  // at a time); `draftPerms` is the working copy the toggles mutate until saved.
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [draftPerms, setDraftPerms] = useState<string[]>([])
-
   // HU-6: reorder mode. `reordering` toggles the ↑/↓ layout; `order` is the local
   // working copy the arrows mutate until saved (or discarded on cancel/error).
   const [reordering, setReordering] = useState(false)
   const [order, setOrder] = useState<ServerRole[]>([])
 
-  // Deletion is irreversible, so the trash tap arms an inline confirmation for
+  // Deletion is irreversible, so the trash action arms an inline confirmation for
   // that row instead of deleting immediately. `pendingDeleteId` is the role
   // awaiting confirmation (one at a time).
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+
+  // Overflow (⋮) menu. `menuRoleId` is the role whose menu is open (one at a
+  // time); `menuAnchor` is the kebab's on-screen rect, measured on press so the
+  // popover can be positioned just below and right-aligned to it.
+  const [menuRoleId, setMenuRoleId] = useState<string | null>(null)
+  const [menuAnchor, setMenuAnchor] = useState<MenuAnchor | null>(null)
+  // One host-view ref per kebab button so we can measureInWindow on press.
+  const kebabRefs = useRef<Record<string, View | null>>({})
 
   useEffect(() => {
     if (!visible) {
       setCreating(false)
       setNewRoleName("")
-      setEditingId(null)
-      setDraftPerms([])
       setReordering(false)
       setOrder([])
       setPendingDeleteId(null)
+      setMenuRoleId(null)
+      setMenuAnchor(null)
     }
   }, [visible])
 
@@ -132,6 +131,14 @@ export default function RolesModal({
     return ""
   }
 
+  // The non-chip part of a row's subtitle: an admin role is summarized by name,
+  // every other role by its permission count.
+  const permsSummary = (role: ServerRole): string => {
+    if (role.permissions.includes(ADMIN_PERMISSION)) return "Rol de administración"
+    const n = role.permissions.length
+    return `${n} ${n === 1 ? "permiso" : "permisos"}`
+  }
+
   const handleSubmit = async () => {
     const ok = await onCreate(newRoleName)
     if (ok) {
@@ -140,34 +147,19 @@ export default function RolesModal({
     }
   }
 
-  // HU-2: open a role's permission editor, seeding the draft from its current
-  // permissions so toggling starts from the role's real state.
-  const openEditor = (role: ServerRole) => {
-    setEditingId(role.id)
-    setDraftPerms([...role.permissions])
+  // Open a role's overflow menu, measuring the kebab so the popover anchors to it.
+  const openMenu = (role: ServerRole) => {
+    const node = kebabRefs.current[role.id]
+    if (!node) return
+    node.measureInWindow((x, y, width, height) => {
+      setMenuAnchor({ x, y, width, height })
+      setMenuRoleId(role.id)
+    })
   }
 
-  // Cancel discards the draft and collapses the editor without calling the API.
-  const cancelEditor = () => {
-    setEditingId(null)
-    setDraftPerms([])
-  }
-
-  const togglePerm = (key: string) => {
-    setDraftPerms((prev) => (prev.includes(key) ? prev.filter((p) => p !== key) : [...prev, key]))
-  }
-
-  // Save sends the COMPLETE checked list. On success the editor collapses; on any
-  // error the toggles revert to the role's state before editing (the parent has
-  // surfaced the reason via `error`).
-  const handleSavePerms = async (role: ServerRole) => {
-    const ok = await onUpdatePermissions(role, draftPerms)
-    if (ok) {
-      setEditingId(null)
-      setDraftPerms([])
-    } else {
-      setDraftPerms([...role.permissions])
-    }
+  const closeMenu = () => {
+    setMenuRoleId(null)
+    setMenuAnchor(null)
   }
 
   // HU-6 (CA2): a role is locked for a non-owner when it sits at their own level
@@ -184,8 +176,7 @@ export default function RolesModal({
   const enterReorder = () => {
     setCreating(false)
     setNewRoleName("")
-    setEditingId(null)
-    setDraftPerms([])
+    setPendingDeleteId(null)
     setOrder([...roles])
     setReordering(true)
   }
@@ -222,6 +213,8 @@ export default function RolesModal({
       setOrder([...roles])
     }
   }
+
+  const menuRole = menuRoleId ? roles.find((r) => r.id === menuRoleId) ?? null : null
 
   return (
     <ModalShell
@@ -299,8 +292,7 @@ export default function RolesModal({
       canManageRoles &&
       (isOwner || ownRolePosition != null) &&
       roles.length > 0 &&
-      !creating &&
-      editingId === null ? (
+      !creating ? (
         <PressableScale
           onPress={enterReorder}
           accessibilityLabel="Reordenar la jerarquía de roles"
@@ -391,110 +383,62 @@ export default function RolesModal({
       ) : (
         <ScrollView style={{ maxHeight: 320 }}>
           {roles.map((role) => {
-            const reason = blockedReason(role)
             const busy = busyRoleId === role.id
-            const editing = editingId === role.id
+            const isDefault = role.id === defaultRoleId
             return (
               <View key={role.id} style={ROW_WRAP}>
                 <View style={ROW}>
-                  {/* Tapping the role opens/closes its permission editor (HU-2). */}
+                  {/* Drill-in: the left region (chevron + name + subtitle) opens
+                      the dedicated permission editor (HU-2). */}
                   <PressableScale
-                    onPress={() => (editing ? cancelEditor() : openEditor(role))}
+                    onPress={() => onEditPermissions(role)}
                     pressedScale={1}
                     accessibilityLabel={`Editar permisos del rol ${role.name}`}
                     hoverStyle={{ backgroundColor: "rgba(255,255,255,0.04)" }}
                     style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}
                   >
-                    <Ionicons
-                      name={editing ? "chevron-down" : "chevron-forward"}
-                      size={14}
-                      color="#5E7E82"
-                    />
+                    <Ionicons name="chevron-forward" size={14} color="#5E7E82" />
                     <View style={{ flex: 1 }}>
                       <Text style={{ color: "#E6F3F3", fontSize: 14, fontWeight: "600" }} numberOfLines={1}>
                         {role.name}
                       </Text>
-                      <Text style={{ color: "#8DA8AC", fontSize: 11, marginTop: 2 }}>
-                        {reason
-                          ? reason
-                          : `${role.permissions.length} ${role.permissions.length === 1 ? "permiso" : "permisos"}`}
-                      </Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 3 }}>
+                        {isDefault ? (
+                          <View style={DEFAULT_CHIP}>
+                            <Text style={DEFAULT_CHIP_TXT}>Por defecto</Text>
+                          </View>
+                        ) : null}
+                        <Text style={{ color: "#8DA8AC", fontSize: 11 }} numberOfLines={1}>
+                          {isDefault ? `· ${permsSummary(role)}` : permsSummary(role)}
+                        </Text>
+                      </View>
                     </View>
                   </PressableScale>
-                  {/* HU-8: open the read-only list of members with this role,
-                      shown only to someone who can manage roles (same
-                      canManageRoles condition the parent uses to open this
-                      modal). The parent does the fetch; this only invokes it. */}
+
+                  {/* Single overflow (⋮) menu holding members / set-default /
+                      delete, shown only to someone who can manage roles (the same
+                      canManageRoles gate the parent uses to open this modal). */}
                   {canManageRoles ? (
-                    <PressableScale
-                      onPress={() => onViewMembers?.(role)}
-                      accessibilityLabel={`Ver los miembros con el rol ${role.name}`}
-                      hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
-                      style={{
-                        width: 34,
-                        height: 34,
-                        borderRadius: 8,
-                        alignItems: "center",
-                        justifyContent: "center",
-                        backgroundColor: "rgba(55,214,192,0.12)",
+                    <View
+                      ref={(node) => {
+                        kebabRefs.current[role.id] = node
                       }}
+                      collapsable={false}
                     >
-                      <Ionicons name="people-outline" size={16} color="#37D6C0" />
-                    </PressableScale>
-                  ) : null}
-                  {/* HU-4: the default role shows a "Por defecto" badge; every
-                      other role gets a "Marcar como por defecto" action, shown
-                      only to someone who can manage roles (same canManageRoles
-                      condition the parent uses to open this modal). */}
-                  {role.id === defaultRoleId ? (
-                    <View style={DEFAULT_BADGE}>
-                      <Ionicons name="star" size={11} color="#37D6C0" />
-                      <Text style={DEFAULT_BADGE_TXT}>Por defecto</Text>
+                      <PressableScale
+                        onPress={() => openMenu(role)}
+                        accessibilityLabel={`Más acciones para el rol ${role.name}`}
+                        hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
+                        style={ICON_BTN}
+                      >
+                        {busy ? (
+                          <ActivityIndicator color="#37D6C0" size="small" />
+                        ) : (
+                          <Ionicons name="ellipsis-vertical" size={16} color="#37D6C0" />
+                        )}
+                      </PressableScale>
                     </View>
-                  ) : canManageRoles ? (
-                    <PressableScale
-                      onPress={() => onSetDefault(role)}
-                      disabled={defaultBusyId === role.id}
-                      accessibilityLabel={`Marcar el rol ${role.name} como rol por defecto`}
-                      hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
-                      style={{
-                        width: 34,
-                        height: 34,
-                        borderRadius: 8,
-                        alignItems: "center",
-                        justifyContent: "center",
-                        backgroundColor: "rgba(55,214,192,0.12)",
-                        opacity: defaultBusyId === role.id ? 0.6 : 1,
-                      }}
-                    >
-                      {defaultBusyId === role.id ? (
-                        <ActivityIndicator color="#37D6C0" size="small" />
-                      ) : (
-                        <Ionicons name="star-outline" size={16} color="#37D6C0" />
-                      )}
-                    </PressableScale>
                   ) : null}
-                  <PressableScale
-                    onPress={() => setPendingDeleteId(role.id)}
-                    disabled={reason !== "" || busy}
-                    accessibilityLabel={`Eliminar rol ${role.name}`}
-                    hoverStyle={reason ? undefined : { backgroundColor: "rgba(255,127,114,0.22)" }}
-                    style={{
-                      width: 34,
-                      height: 34,
-                      borderRadius: 8,
-                      alignItems: "center",
-                      justifyContent: "center",
-                      backgroundColor: "rgba(255,127,114,0.12)",
-                      opacity: reason !== "" ? 0.35 : 1,
-                    }}
-                  >
-                    {busy ? (
-                      <ActivityIndicator color="#FF7F72" size="small" />
-                    ) : (
-                      <Ionicons name="trash-outline" size={16} color="#FF7F72" />
-                    )}
-                  </PressableScale>
                 </View>
 
                 {/* CA1: explicit confirmation before deleting — deletion is
@@ -547,62 +491,175 @@ export default function RolesModal({
                     </View>
                   </View>
                 ) : null}
-
-                {/* HU-2: permission toggles for the open role, Spanish-labelled. */}
-                {editing ? (
-                  <View style={{ paddingBottom: 12, gap: 2 }}>
-                    {PERMISSION_OPTIONS.map((perm) => {
-                      const checked = draftPerms.includes(perm.key)
-                      return (
-                        <PressableScale
-                          key={perm.key}
-                          onPress={() => togglePerm(perm.key)}
-                          disabled={updateBusy}
-                          pressedScale={1}
-                          accessibilityLabel={`${checked ? "Quitar" : "Agregar"} permiso ${perm.label}`}
-                          hoverStyle={{ backgroundColor: "rgba(255,255,255,0.04)" }}
-                          style={PERM_ROW}
-                        >
-                          <Ionicons
-                            name={checked ? "checkbox" : "square-outline"}
-                            size={18}
-                            color={checked ? "#37D6C0" : "#5E7E82"}
-                          />
-                          <Text style={{ color: "#E6F3F3", fontSize: 13 }}>{perm.label}</Text>
-                        </PressableScale>
-                      )
-                    })}
-                    <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
-                      <PressableScale
-                        onPress={() => handleSavePerms(role)}
-                        disabled={updateBusy}
-                        accessibilityLabel="Guardar permisos"
-                        style={{ ...PRIMARY_BTN, opacity: updateBusy ? 0.6 : 1 }}
-                      >
-                        {updateBusy ? (
-                          <ActivityIndicator color="#04211D" size="small" />
-                        ) : (
-                          <Text style={PRIMARY_TXT}>Guardar</Text>
-                        )}
-                      </PressableScale>
-                      <PressableScale
-                        onPress={cancelEditor}
-                        disabled={updateBusy}
-                        accessibilityLabel="Cancelar edición de permisos"
-                        hoverStyle={{ backgroundColor: "rgba(255,255,255,0.08)" }}
-                        style={SECONDARY_BTN}
-                      >
-                        <Text style={{ color: "#8DA8AC", fontSize: 14, fontWeight: "600" }}>Cancelar</Text>
-                      </PressableScale>
-                    </View>
-                  </View>
-                ) : null}
               </View>
             )
           })}
         </ScrollView>
       )}
+
+      {/* Overflow menu popover for the open role, anchored to its kebab. */}
+      {menuRole && menuAnchor ? (
+        <RoleOverflowMenu
+          anchor={menuAnchor}
+          isDefault={menuRole.id === defaultRoleId}
+          blockedReason={blockedReason(menuRole)}
+          onClose={closeMenu}
+          onViewMembers={() => {
+            closeMenu()
+            onViewMembers?.(menuRole)
+          }}
+          onSetDefault={() => {
+            closeMenu()
+            onSetDefault(menuRole)
+          }}
+          onDelete={() => {
+            closeMenu()
+            setPendingDeleteId(menuRole.id)
+          }}
+        />
+      ) : null}
     </ModalShell>
+  )
+}
+
+interface MenuAnchor {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface RoleOverflowMenuProps {
+  anchor: MenuAnchor
+  isDefault: boolean
+  // Non-empty when the role can't be deleted; shown as the disabled item's note.
+  blockedReason: string
+  onClose: () => void
+  onViewMembers: () => void
+  onSetDefault: () => void
+  onDelete: () => void
+}
+
+// Small polished popover for a role's overflow actions. Rendered in its own
+// transparent Modal so it floats above the roles modal; a full-screen backdrop
+// closes it on an outside press (or Escape on web). The card is positioned just
+// below the kebab and right-aligned to it, and grows out of its top-right corner.
+function RoleOverflowMenu({
+  anchor,
+  isDefault,
+  blockedReason,
+  onClose,
+  onViewMembers,
+  onSetDefault,
+  onDelete,
+}: RoleOverflowMenuProps) {
+  // Drive the origin-aware pop-in once mounted (web transition; on native the
+  // Modal's own fade covers the appearance).
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setShown(true))
+    return () => cancelAnimationFrame(id)
+  }, [])
+
+  // Close on Escape (web only, best-effort).
+  useEffect(() => {
+    if (Platform.OS !== "web") return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onClose])
+
+  const windowWidth = Dimensions.get("window").width
+
+  // Position: top just below the kebab; right edge aligned to the kebab's right.
+  const cardStyle: ViewStyle = {
+    position: "absolute",
+    top: anchor.y + anchor.height + 6,
+    right: Math.max(8, windowWidth - (anchor.x + anchor.width)),
+    minWidth: 200,
+    borderRadius: 10,
+    paddingVertical: 6,
+    backgroundColor: "#0C2523",
+    borderWidth: 1,
+    borderColor: "#1A3A3A",
+    ...(Platform.OS === "web"
+      ? ({
+          boxShadow: "0 18px 44px -16px rgba(0,0,0,0.75)",
+          opacity: shown ? 1 : 0,
+          transform: [{ scale: shown ? 1 : 0.96 }],
+          transformOrigin: "top right",
+          transitionProperty: "opacity, transform",
+          transitionDuration: "160ms",
+          transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)",
+        } as object)
+      : {
+          shadowColor: "#000",
+          shadowOpacity: 0.5,
+          shadowRadius: 20,
+          shadowOffset: { width: 0, height: 12 },
+        }),
+  }
+
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+      <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Cerrar menú">
+        {/* Stop the card from forwarding presses to the backdrop. */}
+        <Pressable style={cardStyle} onPress={() => {}}>
+          <MenuItem
+            icon="people-outline"
+            label="Ver miembros"
+            onPress={onViewMembers}
+          />
+          {!isDefault ? (
+            <MenuItem
+              icon="checkmark-circle-outline"
+              label="Marcar como por defecto"
+              onPress={onSetDefault}
+            />
+          ) : null}
+          <MenuItem
+            icon="trash-outline"
+            label="Eliminar"
+            color="#FF7F72"
+            disabled={blockedReason !== ""}
+            note={blockedReason ? `No se puede: ${blockedReason}` : undefined}
+            onPress={onDelete}
+          />
+        </Pressable>
+      </Pressable>
+    </Modal>
+  )
+}
+
+interface MenuItemProps {
+  icon: keyof typeof Ionicons.glyphMap
+  label: string
+  color?: string
+  disabled?: boolean
+  note?: string
+  onPress: () => void
+}
+
+function MenuItem({ icon, label, color = "#E6F3F3", disabled = false, note, onPress }: MenuItemProps) {
+  return (
+    <PressableScale
+      onPress={onPress}
+      disabled={disabled}
+      pressedScale={0.97}
+      accessibilityLabel={label}
+      hoverStyle={disabled ? undefined : { backgroundColor: "rgba(55,214,192,0.12)" }}
+      style={{ ...MENU_ITEM, opacity: disabled ? 0.45 : 1 }}
+    >
+      <Ionicons name={icon} size={16} color={color} />
+      <View style={{ flex: 1 }}>
+        <Text style={{ color, fontSize: 13.5, fontWeight: "600" }}>{label}</Text>
+        {note ? (
+          <Text style={{ color: "#5E7E82", fontSize: 11, marginTop: 2 }}>{note}</Text>
+        ) : null}
+      </View>
+    </PressableScale>
   )
 }
 
@@ -615,14 +672,6 @@ const ROW: ViewStyle = {
   alignItems: "center",
   gap: 10,
   paddingVertical: 10,
-}
-const PERM_ROW: ViewStyle = {
-  flexDirection: "row",
-  alignItems: "center",
-  gap: 10,
-  paddingVertical: 8,
-  paddingHorizontal: 4,
-  borderRadius: 8,
 }
 const NOTICE_ERROR: ViewStyle = {
   paddingHorizontal: 12,
@@ -660,19 +709,13 @@ const SECONDARY_BTN: ViewStyle = {
   justifyContent: "center",
   backgroundColor: "rgba(255,255,255,0.05)",
 }
-const DEFAULT_BADGE: ViewStyle = {
-  flexDirection: "row",
-  alignItems: "center",
-  gap: 4,
-  paddingHorizontal: 9,
+const ICON_BTN: ViewStyle = {
+  width: 34,
   height: 34,
   borderRadius: 8,
+  alignItems: "center",
+  justifyContent: "center",
   backgroundColor: "rgba(55,214,192,0.12)",
-}
-const DEFAULT_BADGE_TXT: TextStyle = {
-  color: "#37D6C0",
-  fontSize: 11.5,
-  fontWeight: "700",
 }
 const ARROW_BTN: ViewStyle = {
   width: 34,
@@ -691,4 +734,27 @@ const CREATE_BTN: ViewStyle = {
   borderRadius: 10,
   marginBottom: 14,
   backgroundColor: "rgba(55,214,192,0.12)",
+}
+// Subtle state label (NOT a button): small rounded pill that only marks the
+// default role. Hairline border keeps it readable without reading as tappable.
+const DEFAULT_CHIP: ViewStyle = {
+  paddingHorizontal: 8,
+  paddingVertical: 2,
+  borderRadius: 6,
+  backgroundColor: "rgba(55,214,192,0.12)",
+  borderWidth: 1,
+  borderColor: "#1A3A3A",
+}
+const DEFAULT_CHIP_TXT: TextStyle = {
+  color: "#37D6C0",
+  fontSize: 11,
+  fontWeight: "600",
+}
+const MENU_ITEM: ViewStyle = {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 10,
+  paddingVertical: 9,
+  paddingHorizontal: 12,
+  borderRadius: 8,
 }

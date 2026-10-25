@@ -1,6 +1,8 @@
 import { Slot } from "expo-router"
 import { StatusBar } from "expo-status-bar"
+import { useEffect } from "react"
 import { Platform } from "react-native"
+import { wakeBackends } from "@/api/wake"
 import { AuthProvider } from "@/context/AuthContext"
 
 // Web-only: browser autofill repaints inputs with a light background and dark
@@ -27,6 +29,16 @@ if (
 }
 
 export default function RootLayout() {
+  useEffect(() => {
+    wakeBackends()
+    if (Platform.OS !== "web") return
+    const onVisible = () => {
+      if (document.visibilityState === "visible") wakeBackends()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+    return () => document.removeEventListener("visibilitychange", onVisible)
+  }, [])
+
   return (
     <AuthProvider>
       <StatusBar style="light" />

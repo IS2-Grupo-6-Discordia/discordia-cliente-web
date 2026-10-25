@@ -1,3 +1,4 @@
+import { File as NativeFile } from "expo-file-system"
 import { getUsersBatch } from "./auth"
 import { api, apiUpload, ApiError } from "./client"
 import type { Server, Category, RoleGroup, Invite, ServerMember, OwnershipTransfer } from "./types"
@@ -250,7 +251,7 @@ export async function createServer(
     if (icon instanceof Blob) {
       fd.append("icon", icon, "icon")
     } else {
-      fd.append("icon", icon as any)
+      fd.append("icon", new NativeFile(icon.uri) as any)
     }
   }
   const res = await apiUpload<BackendServerOut>("/servers", fd)

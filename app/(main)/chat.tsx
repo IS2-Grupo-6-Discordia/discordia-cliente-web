@@ -9,6 +9,7 @@ import {
   Platform,
   ActivityIndicator,
   Image,
+  useWindowDimensions,
 } from "react-native"
 import type { ViewStyle, TextStyle } from "react-native"
 import * as ImagePicker from "expo-image-picker"
@@ -177,6 +178,10 @@ export default function ChatScreen() {
   const [showMembers, setShowMembers] = useState(false)
   const [input, setInput] = useState("")
 
+  const { width: screenWidth } = useWindowDimensions()
+  const isNarrow = screenWidth < 720
+  const [channelSidebarOpen, setChannelSidebarOpen] = useState(false)
+
   // Web-only hover tooltip for the server rail: shows the full server name next
   // to its icon, so long names stay discoverable even when the icon is just an
   // abbreviation or a photo.
@@ -271,12 +276,12 @@ export default function ChatScreen() {
   const [bannerError, setBannerError] = useState("")
 
   useEffect(() => {
-    getServers().then((list) => {
-      setServers(list)
-      // Land on the first real server the user belongs to. If they have none, no
-      // server stays selected and the screen shows its "create or join" state.
-      setActiveServer((current) => current || list[0]?.id || "")
-    })
+    getServers()
+      .then((list) => {
+        setServers(list)
+        setActiveServer((current) => current || list[0]?.id || "")
+      })
+      .catch(() => setBannerError("No pudimos cargar tus servidores. Probá de nuevo en un rato."))
   }, [])
 
   useEffect(() => {
@@ -294,13 +299,16 @@ export default function ChatScreen() {
       setActiveChannel("")
       return
     }
-    getCategories(activeServer).then((cats) => {
-      setCategories(cats)
-      // Switch focus to the new server's first text channel so we never keep
-      // showing the previous server's channel (and its messages).
-      const firstText = cats.flatMap((c) => c.channels).find((c) => c.type === "text")
-      setActiveChannel(firstText ? firstText.id : "")
-    })
+    getCategories(activeServer)
+      .then((cats) => {
+        setCategories(cats)
+        const firstText = cats.flatMap((c) => c.channels).find((c) => c.type === "text")
+        setActiveChannel(firstText ? firstText.id : "")
+      })
+      .catch(() => {
+        setCategories([])
+        setActiveChannel("")
+      })
     // Real roster from the backend (owner + members), hydrated with names/avatars.
     getServerMembers(activeServer)
       .then((members) => setRoles(membersToRoleGroups(members)))
@@ -328,7 +336,9 @@ export default function ChatScreen() {
       setMessages([])
       return
     }
-    getMessages(activeChannel).then(setMessages)
+    getMessages(activeChannel)
+      .then(setMessages)
+      .catch(() => setMessages([]))
   }, [activeChannel])
 
   // HU-7: when a real server becomes active, check for a pending ownership
@@ -437,7 +447,7 @@ export default function ChatScreen() {
 
   const handleSend = async () => {
     if (!input.trim()) return
-    const msg = await sendMessage(activeChannel, input.trim())
+    const msg = await sendMessage(activeChannel, input.trim(), user?.name)
     setMessages((prev) => [...prev, msg])
     setInput("")
   }
@@ -462,7 +472,7 @@ export default function ChatScreen() {
       return
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ["images"],
       quality: 0.8,
     })
     if (result.canceled) return
@@ -1069,13 +1079,26 @@ export default function ChatScreen() {
         </View>
       ) : null}
 
+      {isNarrow && channelSidebarOpen ? (
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setChannelSidebarOpen(false)}
+          accessibilityLabel="Cerrar lista de canales"
+          style={{ position: "absolute", left: 52, right: 0, top: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.45)", zIndex: 30 }}
+        />
+      ) : null}
+
       {/* Channel sidebar */}
+      {!isNarrow || channelSidebarOpen ? (
       <View
         style={{
-          width: 180,
-          backgroundColor: "rgba(255,255,255,0.055)",
+          width: isNarrow ? Math.min(240, screenWidth - 52) : 180,
+          backgroundColor: isNarrow ? "#151D23" : "rgba(255,255,255,0.055)",
           borderRightWidth: 1,
           borderRightColor: "rgba(255,255,255,0.13)",
+          ...(isNarrow
+            ? ({ position: "absolute", left: 52, top: 0, bottom: 0, zIndex: 31 } as object)
+            : {}),
         }}
       >
         {/* Server name header: name on its own row so long names stay readable,
@@ -1307,6 +1330,7 @@ export default function ChatScreen() {
           </View>
         ) : null}
       </View>
+      ) : null}
 
       {/* Chat main */}
       <View style={{ flex: 1 }}>
@@ -1314,14 +1338,37 @@ export default function ChatScreen() {
         <View
           style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.13)" }}
         >
+          {isNarrow ? (
+            <TouchableOpacity
+              onPress={() => {
+                setShowMembers(false)
+                setChannelSidebarOpen((o) => !o)
+              }}
+              accessibilityLabel="Mostrar canales"
+              style={{
+                width: 30,
+                height: 30,
+                borderRadius: 8,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "rgba(255,255,255,0.05)",
+              }}
+            >
+              <Ionicons name="menu" size={18} color="#8DA8AC" />
+            </TouchableOpacity>
+          ) : null}
           <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 13.5 }}>
-            {channel ? `# ${channel.name}` : "Discordia"}
+            {channel ? `# ${channel.name}` : activeServer ? "Sin canales" : "Inicio"}
           </Text>
           <Text style={{ color: "#8DA8AC", flex: 1, marginLeft: 8, fontSize: 11 }} numberOfLines={1}>
             {servers.find((s) => s.id === activeServer)?.name ?? ""}
           </Text>
+          {activeServer ? (
           <TouchableOpacity
-            onPress={() => setShowMembers((o) => !o)}
+            onPress={() => {
+              if (isNarrow) setChannelSidebarOpen(false)
+              setShowMembers((o) => !o)
+            }}
             accessibilityLabel="Mostrar u ocultar miembros"
             style={{
               flexDirection: "row",
@@ -1342,6 +1389,7 @@ export default function ChatScreen() {
               Miembros
             </Text>
           </TouchableOpacity>
+          ) : null}
         </View>
 
         {/* HU-7: recipient banner — offered ownership of this server */}
@@ -1570,14 +1618,26 @@ export default function ChatScreen() {
         </View>
       </View>
 
+      {isNarrow && showMembers ? (
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setShowMembers(false)}
+          accessibilityLabel="Cerrar miembros"
+          style={{ position: "absolute", left: 52, right: 0, top: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.45)", zIndex: 30 }}
+        />
+      ) : null}
+
       {/* Members panel */}
       {showMembers && (
         <View
           style={{
-            width: 216,
-            backgroundColor: "rgba(255,255,255,0.03)",
+            width: isNarrow ? Math.min(260, screenWidth - 52) : 216,
+            backgroundColor: isNarrow ? "#131B21" : "rgba(255,255,255,0.03)",
             borderLeftWidth: 1,
             borderLeftColor: "rgba(255,255,255,0.10)",
+            ...(isNarrow
+              ? ({ position: "absolute", right: 0, top: 0, bottom: 0, zIndex: 31 } as object)
+              : {}),
           }}
         >
           {/* Panel header */}

@@ -1,22 +1,25 @@
 import { Tabs, useRouter, Redirect } from "expo-router"
 import { View, Text, TouchableOpacity, Platform } from "react-native"
+import type { ColorValue } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
 import UserMenu from "@/components/UserMenu"
 import SessionSplash from "@/components/SessionSplash"
+import { useWakeState } from "@/api/wake"
 import { VoiceProvider } from "@/context/VoiceContext"
 
 // Maps each tab to a filled/outline Ionicons pair so the bar reads as real
 // navigation (the default had no icons, which rendered as confusing ▼ glyphs).
 type IoniconName = React.ComponentProps<typeof Ionicons>["name"]
 function tabIcon(active: IoniconName, inactive: IoniconName) {
-  return ({ color, size, focused }: { color: string; size: number; focused: boolean }) => (
+  return ({ color, size, focused }: { color: ColorValue; size: number; focused: boolean }) => (
     <Ionicons name={focused ? active : inactive} size={size} color={color} />
   )
 }
 
 export default function MainLayout() {
   const { isLoggedIn, isLoading } = useAuth()
+  const wake = useWakeState()
   const router = useRouter()
 
   // Al recargar una ruta protegida (p. ej. /(main)/chat) este layout corre antes
@@ -24,6 +27,10 @@ export default function MainLayout() {
   // isLoggedIn es false por un frame y rebota al login aunque haya token.
   if (isLoading) {
     return <SessionSplash />
+  }
+
+  if (wake === "waking") {
+    return <SessionSplash message="Estamos despertando el servidor. La primera vez puede tardar hasta un minuto." />
   }
 
   // Session guard: as soon as the session is cleared (logout button, 401 auto-logout,
@@ -105,11 +112,11 @@ export default function MainLayout() {
           }}
         />
         <Tabs.Screen
-          name="admin"
+          name="backoffice"
           options={{
-            title: "Servidor",
-            tabBarLabel: "Servidor",
-            tabBarIcon: tabIcon("settings", "settings-outline"),
+            title: "Backoffice",
+            tabBarLabel: "Backoffice",
+            tabBarIcon: tabIcon("shield-checkmark", "shield-checkmark-outline"),
           }}
         />
         <Tabs.Screen

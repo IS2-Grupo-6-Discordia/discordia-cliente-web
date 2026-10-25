@@ -96,10 +96,15 @@ export function friendlyError(err: unknown): string {
     return genericForStatus(err.status)
   }
 
-  // Network failures throw a TypeError; timeouts (AbortController) an AbortError.
-  if (err instanceof TypeError || (err instanceof Error && err.name === "AbortError")) {
+  if (
+    err instanceof TypeError ||
+    (err instanceof Error &&
+      (err.name === "AbortError" || /network|fetch|connect|timed? ?out/i.test(err.message)))
+  ) {
     return "No pudimos conectarnos. Revisá tu conexión e intentá de nuevo."
   }
+
+  if (__DEV__) console.warn("[friendlyError] unexpected error:", err)
 
   return "Ocurrió un error inesperado. Probá de nuevo."
 }
@@ -135,6 +140,7 @@ export async function api<T>(
     } catch {
       detail = text || "Error desconocido"
     }
+    if (__DEV__) console.warn(`[api] ${options.method ?? "GET"} ${path} -> ${res.status}`, text.slice(0, 200))
     throw new ApiError(res.status, detail, extractDetailMessage(detail, "Error desconocido"))
   }
 
@@ -177,6 +183,7 @@ export async function apiUpload<T>(
     } catch {
       detail = text || "Error desconocido"
     }
+    if (__DEV__) console.warn(`[apiUpload] POST ${path} -> ${res.status}`, text.slice(0, 200))
     throw new ApiError(res.status, detail, extractDetailMessage(detail, "Error desconocido"))
   }
 

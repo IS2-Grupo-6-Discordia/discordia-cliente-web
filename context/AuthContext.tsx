@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react"
 import type { ReactNode } from "react"
+import AsyncStorage from "@react-native-async-storage/async-storage"
 import type { User } from "@/api/types"
 import { Platform } from "react-native"
 import { ApiError, getToken, loadToken } from "@/api/client"
@@ -40,7 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!active) return
       if (getToken()) {
         try {
-          const saved = localStorage.getItem("discordia_user")
+          const saved = await AsyncStorage.getItem("discordia_user")
           if (saved) setUserState(JSON.parse(saved))
         } catch {
           // Storage ilegible: seguimos sin user y el guard mandará al login.
@@ -55,7 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setUser = useCallback((u: User) => {
     setUserState(u)
-    localStorage.setItem("discordia_user", JSON.stringify(u))
+    AsyncStorage.setItem("discordia_user", JSON.stringify(u))
   }, [])
 
   const [signedOutReason, setSignedOutReason] = useState<SignedOutReason | null>(null)
@@ -64,7 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     apiLogout()
     setUserState(null)
-    localStorage.removeItem("discordia_user")
+    AsyncStorage.removeItem("discordia_user")
   }, [])
 
   const signOutWithReason = useCallback(

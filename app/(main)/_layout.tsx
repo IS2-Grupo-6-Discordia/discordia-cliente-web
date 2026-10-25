@@ -6,6 +6,7 @@ import { useAuth } from "@/context/AuthContext"
 import UserMenu from "@/components/UserMenu"
 import SessionSplash from "@/components/SessionSplash"
 import { useWakeState } from "@/api/wake"
+import { VoiceProvider } from "@/context/VoiceContext"
 
 // Maps each tab to a filled/outline Ionicons pair so the bar reads as real
 // navigation (the default had no icons, which rendered as confusing ▼ glyphs).
@@ -39,92 +40,94 @@ export default function MainLayout() {
   }
 
   return (
-    <Tabs
-      screenOptions={{
-        headerStyle: {
-          backgroundColor: "rgba(255,255,255,0.055)",
-          borderBottomColor: "rgba(255,255,255,0.13)",
-          borderBottomWidth: 1,
-        } as any,
-        headerTintColor: "#E6F3F3",
-        headerTitle: () => (
-          <TouchableOpacity
-            onPress={() => router.push("/(main)/chat")}
-            accessibilityLabel="Ir al inicio"
-            style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
-          >
-            <View
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 9,
-                backgroundColor: "#37D6C0",
-                alignItems: "center",
-                justifyContent: "center",
-                ...(Platform.OS === "web"
-                  ? ({ boxShadow: "0 4px 16px -2px rgba(55,214,192,0.65)" } as object)
-                  : {}),
-              }}
+    <VoiceProvider>
+      <Tabs
+        screenOptions={{
+          headerStyle: {
+            backgroundColor: "rgba(255,255,255,0.055)",
+            borderBottomColor: "rgba(255,255,255,0.13)",
+            borderBottomWidth: 1,
+          } as any,
+          headerTintColor: "#E6F3F3",
+          headerTitle: () => (
+            <TouchableOpacity
+              onPress={() => router.push("/(main)/chat")}
+              accessibilityLabel="Ir al inicio"
+              style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
             >
-              <Text style={{ color: "#04211D", fontWeight: "900", fontSize: 14 }}>D</Text>
+              <View
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 9,
+                  backgroundColor: "#37D6C0",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  ...(Platform.OS === "web"
+                    ? ({ boxShadow: "0 4px 16px -2px rgba(55,214,192,0.65)" } as object)
+                    : {}),
+                }}
+              >
+                <Text style={{ color: "#04211D", fontWeight: "900", fontSize: 14 }}>D</Text>
+              </View>
+              <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 15 }}>Discordia</Text>
+            </TouchableOpacity>
+          ),
+          headerRight: () => (
+            <View style={{ marginRight: 12 }}>
+              <UserMenu />
             </View>
-            <Text style={{ color: "#E6F3F3", fontWeight: "800", fontSize: 15 }}>Discordia</Text>
-          </TouchableOpacity>
-        ),
-        headerRight: () => (
-          <View style={{ marginRight: 12 }}>
-            <UserMenu />
-          </View>
-        ),
-        tabBarStyle: {
-          backgroundColor: "#0A1620",
-          borderTopColor: "rgba(255,255,255,0.13)",
-          borderTopWidth: 1,
-          height: 62,
-          paddingTop: 6,
-          paddingBottom: 8,
-        },
-        tabBarActiveTintColor: "#37D6C0",
-        tabBarInactiveTintColor: "#8DA8AC",
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: "600",
-        },
-        sceneStyle: { backgroundColor: "#0A1620" },
-      }}
-    >
-      <Tabs.Screen
-        name="chat"
-        options={{
-          title: "Chat",
-          tabBarLabel: "Chat",
-          tabBarIcon: tabIcon("chatbubble-ellipses", "chatbubble-ellipses-outline"),
+          ),
+          tabBarStyle: {
+            backgroundColor: "#0A1620",
+            borderTopColor: "rgba(255,255,255,0.13)",
+            borderTopWidth: 1,
+            height: 62,
+            paddingTop: 6,
+            paddingBottom: 8,
+          },
+          tabBarActiveTintColor: "#37D6C0",
+          tabBarInactiveTintColor: "#8DA8AC",
+          tabBarLabelStyle: {
+            fontSize: 11,
+            fontWeight: "600",
+          },
+          sceneStyle: { backgroundColor: "#0A1620" },
         }}
-      />
-      <Tabs.Screen
-        name="voice"
-        options={{
-          title: "Voz",
-          tabBarLabel: "Voz",
-          tabBarIcon: tabIcon("headset", "headset-outline"),
-        }}
-      />
-      <Tabs.Screen
-        name="backoffice"
-        options={{
-          title: "Backoffice",
-          tabBarLabel: "Backoffice",
-          tabBarIcon: tabIcon("shield-checkmark", "shield-checkmark-outline"),
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{ href: null, title: "Perfil" }}
-      />
-      <Tabs.Screen
-        name="users/[id]"
-        options={{ href: null, title: "Perfil" }}
-      />
-    </Tabs>
+      >
+        <Tabs.Screen
+          name="chat"
+          options={{
+            title: "Chat",
+            tabBarLabel: "Chat",
+            tabBarIcon: tabIcon("chatbubble-ellipses", "chatbubble-ellipses-outline"),
+          }}
+        />
+        <Tabs.Screen
+          name="voice"
+          options={{
+            title: "Voz",
+            tabBarLabel: "Voz",
+            tabBarIcon: tabIcon("headset", "headset-outline"),
+          }}
+        />
+        <Tabs.Screen
+          name="backoffice"
+          options={{
+            title: "Backoffice",
+            tabBarLabel: "Backoffice",
+            tabBarIcon: tabIcon("shield-checkmark", "shield-checkmark-outline"),
+          }}
+        />
+        <Tabs.Screen
+          name="profile"
+          options={{ href: null, title: "Perfil" }}
+        />
+        <Tabs.Screen
+          name="users/[id]"
+          options={{ href: null, title: "Perfil" }}
+        />
+      </Tabs>
+    </VoiceProvider>
   )
 }

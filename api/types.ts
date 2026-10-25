@@ -124,3 +124,10 @@ export interface Message {
   reactions?: { emoji: string; count: number; mine?: boolean }[]
 }
 
+
+// HU-17: what POST /voice/channels/{id}/join hands back. `url` is the LiveKit
+// server (wss://...) and `token` a short-lived JWT scoped to that one room.
+export interface VoiceJoinResponse {
+  url: string
+  token: string
+}

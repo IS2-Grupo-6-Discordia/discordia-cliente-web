@@ -1,7 +1,16 @@
 import { File as NativeFile } from "expo-file-system"
 import { getUsersBatch } from "./auth"
 import { api, apiUpload, ApiError } from "./client"
-import type { Server, Category, RoleGroup, Invite, ServerMember, OwnershipTransfer } from "./types"
+import type {
+  Server,
+  Category,
+  RoleGroup,
+  Invite,
+  ServerMember,
+  OwnershipTransfer,
+  ServerBan,
+  MyServerPermissions,
+} from "./types"
 
 // Reads always stay mocked: the backend does NOT expose GET /servers,
 // GET categories, or GET roles endpoints yet, so there is nothing to call.
@@ -582,4 +591,85 @@ export async function rejectOwnershipTransfer(
     { method: "POST" },
   )
   return toOwnershipTransfer(res)
+}
+
+// ---- Moderation: bans (HU-25 / HU-26) -----------------------------------------
+
+interface BackendBan {
+  user_id: string
+  banned_by: string
+  reason: string | null
+  created_at: string
+}
+
+interface BackendMyPermissions {
+  server_id: string
+  is_owner: boolean
+  permissions: string[]
+}
+
+// The caller's effective permissions in a server, to show only the actions
+// that will succeed.
+export async function getMyServerPermissions(serverId: string): Promise<MyServerPermissions> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(300)
+    return { isOwner: true, permissions: [] }
+  }
+
+  const res = await api<BackendMyPermissions>(`/servers/${serverId}/members/me/permissions`)
+  return { isOwner: res.is_owner, permissions: res.permissions }
+}
+
+// HU-25: ban a user. Banning someone already banned is idempotent (200 with the
+// existing ban). 403 covers missing permission, the owner and an equal or
+// higher role; the backend detail says which.
+export async function banMember(serverId: string, userId: string, reason?: string): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+
+  const trimmed = reason?.trim()
+  await api<BackendBan>(`/servers/${serverId}/bans/${userId}`, {
+    method: "PUT",
+    body: JSON.stringify({ reason: trimmed ? trimmed : null }),
+  })
+}
+
+// HU-26: the server's active bans, most recent first, with names resolved.
+export async function listBans(serverId: string): Promise<ServerBan[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay(400)
+    return []
+  }
+
+  const rows = await api<BackendBan[]>(`/servers/${serverId}/bans`)
+  const ids = Array.from(new Set(rows.flatMap((row) => [row.user_id, row.banned_by])))
+  const profiles = ids.length > 0 ? await getUsersBatch(ids) : []
+  const byId = new Map(profiles.map((profile) => [profile.id, profile]))
+
+  return rows.map((row) => {
+    const profile = byId.get(row.user_id)
+    const name = profile?.name ?? "Usuario"
+    return {
+      userId: row.user_id,
+      name,
+      avatar: abbrFor(name),
+      avatarUrl: profile?.avatarUrl ?? null,
+      bannedBy: row.banned_by,
+      bannedByName: byId.get(row.banned_by)?.name ?? "Usuario",
+      reason: row.reason,
+      createdAt: row.created_at,
+    }
+  })
+}
+
+// HU-26: lift a ban. 204 on success; the user can rejoin with a valid invite.
+export async function unbanMember(serverId: string, userId: string): Promise<void> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return
+  }
+
+  await api<void>(`/servers/${serverId}/bans/${userId}`, { method: "DELETE" })
 }

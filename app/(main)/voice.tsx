@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { View, Text, ScrollView, Platform, ActivityIndicator } from "react-native"
+import { View, Text, ScrollView, Platform, ActivityIndicator, useWindowDimensions } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 import { useRouter } from "expo-router"
 import Avatar from "@/components/Avatar"
@@ -36,6 +36,8 @@ export default function VoiceScreen() {
   const voice = useVoice()
   const { channel, status, participants } = voice
   const [micError, setMicError] = useState("")
+  // Phones: two smaller cards per row instead of one wide card each.
+  const isNarrow = useWindowDimensions().width < 600
 
   const handleToggleMic = async () => {
     setMicError("")
@@ -91,7 +93,7 @@ export default function VoiceScreen() {
           flexDirection: "row",
           alignItems: "center",
           gap: 10,
-          paddingHorizontal: 20,
+          paddingHorizontal: isNarrow ? 14 : 20,
           height: 52,
           borderBottomWidth: 1,
           borderBottomColor: "rgba(255,255,255,0.10)",
@@ -136,22 +138,22 @@ export default function VoiceScreen() {
           flexGrow: 1,
           justifyContent: "center",
           alignItems: "center",
-          padding: 20,
+          padding: isNarrow ? 12 : 20,
         }}
       >
         {connecting ? (
           <Text style={{ color: "#8DA8AC", fontSize: 12.5 }}>Entrando a la sala...</Text>
         ) : (
-          <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 16, maxWidth: 700 }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: isNarrow ? 10 : 16, maxWidth: 700, width: "100%" }}>
             {participants.map((p) => (
               <View
                 key={p.id}
                 style={{
                   alignItems: "center",
-                  paddingVertical: 28,
-                  paddingHorizontal: 24,
+                  paddingVertical: isNarrow ? 18 : 28,
+                  paddingHorizontal: isNarrow ? 10 : 24,
                   width: "47%",
-                  minWidth: 200,
+                  minWidth: isNarrow ? 130 : 200,
                   backgroundColor: "rgba(255,255,255,0.04)",
                   borderWidth: 1,
                   borderColor: p.isLocal ? "rgba(55,214,192,0.35)" : "rgba(255,255,255,0.10)",
@@ -164,7 +166,7 @@ export default function VoiceScreen() {
                 {/* Avatar + mic-off badge */}
                 <View style={{ position: "relative" }}>
                   <View style={{ borderRadius: 9999, padding: 3 }}>
-                    <Avatar initials={p.avatar} uri={p.avatarUrl} size={68} />
+                    <Avatar initials={p.avatar} uri={p.avatarUrl} size={isNarrow ? 52 : 68} />
                   </View>
                   {!p.micEnabled ? (
                     <View

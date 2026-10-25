@@ -1136,6 +1136,9 @@ export default function ChatScreen() {
         setJoinError("No existe una invitación con ese código.")
       } else if (err instanceof ApiError && err.status === 403) {
         setJoinError("Estás baneado de este servidor.")
+      } else if (err instanceof ApiError && err.status === 410) {
+        // Expired, used up or revoked. Mirrors the deep-link route's wording.
+        setJoinError("Esta invitación expiró o alcanzó su límite de usos.")
       } else {
         setJoinError(friendlyError(err))
       }

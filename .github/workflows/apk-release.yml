@@ -8,6 +8,9 @@ name: APK de Android
 on:
   push:
     branches: [main]
+    # Cambios que son solo de documentación no generan una APK (cada build gasta cupo de EAS).
+    paths-ignore:
+      - "**.md"
   workflow_dispatch:
 
 # Dos merges seguidos: solo importa la APK del último. Cancelar acá no frena la

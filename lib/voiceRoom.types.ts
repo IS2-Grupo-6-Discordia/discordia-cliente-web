@@ -33,6 +33,9 @@ export class VoiceAbortedError extends Error {
 
 export interface VoiceRoomHandle {
   disconnect: () => Promise<void>
+  // HU-19: mutes/unmutes the published mic track; the others see it through
+  // LiveKit's mute events. Rejects with MicrophoneError if unmuting fails.
+  setMicEnabled: (enabled: boolean) => Promise<void>
 }
 
 // Thrown when the browser denies or lacks a microphone: without it CA1

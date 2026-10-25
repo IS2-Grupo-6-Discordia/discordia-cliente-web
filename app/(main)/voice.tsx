@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { View, Text, ScrollView, Platform, ActivityIndicator } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 import { useRouter } from "expo-router"
@@ -5,13 +6,45 @@ import Avatar from "@/components/Avatar"
 import PressableScale from "@/components/PressableScale"
 import { useVoice } from "@/context/VoiceContext"
 
+// HU-19: a plain mic while transmitting; muted, the same mic crossed by a red
+// diagonal line (drawn over the icon, since Ionicons' mic-off is single-color).
+function MicIcon({ muted, size, color }: { muted: boolean; size: number; color: string }) {
+  return (
+    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+      <Ionicons name="mic" size={size} color={color} />
+      {muted ? (
+        <View
+          style={{
+            position: "absolute",
+            width: size * 1.25,
+            height: 3,
+            borderRadius: 2,
+            backgroundColor: "#FF4D4D",
+            transform: [{ rotate: "-45deg" }],
+          }}
+        />
+      ) : null}
+    </View>
+  )
+}
+
 // HU-17: the call the user joined from the channel list. Joining happens there
 // (confirmation + permission checks); this tab shows who is in the room and
-// lets the user hang up. Mic toggles (HU-19) are not wired yet.
+// lets the user mute (HU-19) or hang up.
 export default function VoiceScreen() {
   const router = useRouter()
   const voice = useVoice()
   const { channel, status, participants } = voice
+  const [micError, setMicError] = useState("")
+
+  const handleToggleMic = async () => {
+    setMicError("")
+    try {
+      await voice.toggleMic()
+    } catch (err) {
+      setMicError(err instanceof Error ? err.message : "No pudimos cambiar el estado de tu micrófono.")
+    }
+  }
 
   if (status === "idle" || !channel) {
     return (
@@ -159,13 +192,19 @@ export default function VoiceScreen() {
                   {p.isLocal ? <Text style={{ color: "#8DA8AC", fontWeight: "500" }}> (vos)</Text> : null}
                 </Text>
                 <Text style={{ fontSize: 11, marginTop: 3, color: "#8DA8AC" }}>
-                  {p.micEnabled ? "En la sala" : "Sin micrófono"}
+                  {p.micEnabled ? "En la sala" : "Silenciado"}
                 </Text>
               </View>
             ))}
           </View>
         )}
       </ScrollView>
+
+      {micError ? (
+        <Text style={{ color: "#FF9E94", fontSize: 12, textAlign: "center", paddingHorizontal: 20, paddingBottom: 8 }}>
+          {micError}
+        </Text>
+      ) : null}
 
       {/* Control bar */}
       <View
@@ -179,6 +218,32 @@ export default function VoiceScreen() {
           backgroundColor: "rgba(255,255,255,0.03)",
         }}
       >
+        {/* HU-19: mute toggle */}
+        <View style={{ alignItems: "center", gap: 7, width: 88, opacity: connecting ? 0.5 : 1 }}>
+          <PressableScale
+            onPress={handleToggleMic}
+            disabled={connecting}
+            accessibilityLabel={voice.micEnabled ? "Silenciar micrófono" : "Activar micrófono"}
+            pressedScale={0.9}
+            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.16)" }}
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 9999,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: "rgba(255,255,255,0.10)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.14)",
+            }}
+          >
+            <MicIcon muted={!voice.micEnabled} size={22} color="#E6F3F3" />
+          </PressableScale>
+          <Text style={{ color: "#C9DADC", fontWeight: "700", fontSize: 10 }}>
+            {voice.micEnabled ? "Silenciar" : "Activar"}
+          </Text>
+        </View>
+
         <View style={{ alignItems: "center", gap: 7, width: 88 }}>
           <PressableScale
             onPress={() => voice.leave()}

@@ -761,6 +761,27 @@ export async function updateRolePermissions(
   return toServerRole(res)
 }
 
+// HU-6: reorder the server's role hierarchy. `roleIds` is the COMPLETE list of
+// the server's roles, each exactly once, in the desired order (first = position
+// 1 = top). Admin-only — the backend answers 403 when the caller lacks
+// MANAGE_ROLES/ADMINISTRATOR or the new order would place a role at/above the
+// caller's own level (hierarchy violation; the owner is exempt), 404 when the
+// server doesn't exist, and 422 when the list is empty, has duplicates, carries
+// ids from another server, or is incomplete. On success (200) it returns the
+// already-reordered role list (position 1..N), mapped like getServerRoles so the
+// modal can replace its list in place without a reload.
+export async function reorderRoles(serverId: string, roleIds: string[]): Promise<ServerRole[]> {
+  if (WRITE_USE_MOCK) {
+    await mockDelay()
+    return roleIds.map((id, i) => ({ id, serverId, name: `Rol ${i + 1}`, permissions: [], position: i + 1 }))
+  }
+  const res = await api<BackendRole[]>(`/servers/${serverId}/roles/reorder`, {
+    method: "PUT",
+    body: JSON.stringify({ role_ids: roleIds }),
+  })
+  return res.map(toServerRole)
+}
+
 // ---- HU-3: assign/remove a role to/from a member ----------------------------
 
 // A member's roles (GET /servers/{id}/members/{userId}/roles → MemberRolesOut,

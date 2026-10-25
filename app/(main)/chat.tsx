@@ -43,6 +43,7 @@ import {
   deleteRole,
   createRole,
   updateRolePermissions,
+  reorderRoles,
   getMemberPermissions,
   getMemberRoles,
   assignRoleToMember,
@@ -291,6 +292,10 @@ export default function ChatScreen() {
   const [defaultRoleId, setDefaultRoleId] = useState<string | null>(null)
   // HU-4: the role whose "Marcar como por defecto" request is in flight.
   const [roleDefaultBusyId, setRoleDefaultBusyId] = useState("")
+  // HU-6: reorder hierarchy. `roleReorderBusy` flags the save request; the
+  // current user's own roles feed the client-side hierarchy helper (CA2).
+  const [roleReorderBusy, setRoleReorderBusy] = useState(false)
+  const [currentUserRoles, setCurrentUserRoles] = useState<ServerRole[]>([])
 
   // HU-3: per-member role assignment selector. Admin-gated (same condition as
   // the role manager). `memberRolesList` is every server role; `memberAssignedIds`
@@ -581,16 +586,21 @@ export default function ChatScreen() {
     setRoleBusyId("")
     if (!isRealServerId(activeServer)) {
       setRolesList([])
+      setCurrentUserRoles([])
       return
     }
     setRolesLoading(true)
     try {
-      const [list, defaultId] = await Promise.all([
+      // HU-6: also load the current user's own roles so the reorder helper (CA2)
+      // can compute their hierarchy level without a separate round-trip.
+      const [list, defaultId, myRoles] = await Promise.all([
         getServerRoles(activeServer),
         getDefaultRoleId(activeServer),
+        user?.id ? getMemberRoles(activeServer, user.id) : Promise.resolve([] as ServerRole[]),
       ])
       setRolesList(list)
       setDefaultRoleId(defaultId)
+      setCurrentUserRoles(myRoles)
     } catch (err) {
       setRolesError(friendlyError(err))
       setRolesList([])
@@ -709,6 +719,44 @@ export default function ChatScreen() {
       return false
     } finally {
       setRoleUpdateBusy(false)
+    }
+  }
+
+  // HU-6: the current user's own hierarchy position — the LOWEST position number
+  // (= highest in the hierarchy) among their roles, EXCLUDING the default role.
+  // null when they hold no non-default role. The owner is exempt (handled via
+  // `isOwner` in the modal), so this is only consulted for non-owners. Mirrors
+  // the backend's "own role" rule so the reorder UI can pre-disable illegal moves.
+  const ownRolePosition = currentUserRoles
+    .filter((r) => r.id !== defaultRoleId)
+    .reduce<number | null>((min, r) => (min === null || r.position < min ? r.position : min), null)
+
+  // HU-6: persist a new role order. Sends the COMPLETE id list in the displayed
+  // order (first = position 1 = top). Mirrors the other role handlers' in-place
+  // update: on 200 the modal's list is replaced with the backend's reordered
+  // response (no reload). Returns true on success so the modal exits reorder
+  // mode; false (403/422/other) so it reverts to the previous order.
+  const handleReorderRoles = async (roleIds: string[]): Promise<boolean> => {
+    setRoleReorderBusy(true)
+    setRolesError("")
+    try {
+      const reordered = await reorderRoles(activeServer, roleIds)
+      setRolesList(reordered)
+      return true
+    } catch (err) {
+      // 403: missing MANAGE_ROLES/ADMINISTRATOR, or a hierarchy violation (moving
+      // a role to/above the caller's own level). 422: the list no longer matches
+      // the server's roles (changed/incomplete/duplicated).
+      if (err instanceof ApiError && err.status === 403) {
+        setRolesError("No podés mover roles que estén a tu nivel o por encima del tuyo, o no tenés permisos para reordenar.")
+      } else if (err instanceof ApiError && err.status === 422) {
+        setRolesError("La lista de roles cambió. Volvé a abrir el modal e intentá de nuevo.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+      return false
+    } finally {
+      setRoleReorderBusy(false)
     }
   }
 
@@ -2637,11 +2685,15 @@ export default function ChatScreen() {
         canAdministrate={canAdministrate}
         createBusy={roleCreateBusy}
         updateBusy={roleUpdateBusy}
+        reorderBusy={roleReorderBusy}
+        isOwner={isOwner}
+        ownRolePosition={ownRolePosition}
         onClose={() => setRolesOpen(false)}
         onDelete={handleDeleteRole}
         onSetDefault={handleSetDefaultRole}
         onCreate={handleCreateRole}
         onUpdatePermissions={handleUpdateRolePermissions}
+        onReorder={handleReorderRoles}
       />
 
       {/* HU-3: per-member role assignment */}

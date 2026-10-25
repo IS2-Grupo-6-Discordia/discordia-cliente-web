@@ -21,6 +21,14 @@ interface RolesModalProps {
   canAdministrate?: boolean
   createBusy?: boolean
   updateBusy?: boolean
+  // HU-6: the "Guardar orden" request is in flight.
+  reorderBusy?: boolean
+  // HU-6 (CA2): hierarchy helper. The owner is exempt (no restriction);
+  // `ownRolePosition` is the current user's own position (lowest position number
+  // = highest in the hierarchy) among their non-default roles, or null when they
+  // hold none. Used to disable arrows for roles at the user's level or above.
+  isOwner?: boolean
+  ownRolePosition?: number | null
   onClose: () => void
   onDelete: (role: ServerRole) => void
   // HU-4: set this role as the server's default role for new members. Mirrors
@@ -33,6 +41,10 @@ interface RolesModalProps {
   // Resolves true on success so the editor can collapse; false (403/409/422)
   // keeps it open and the caller reverts the toggles to the role's state.
   onUpdatePermissions: (role: ServerRole, permissions: string[]) => Promise<boolean>
+  // HU-6: persist a new hierarchy. Receives the COMPLETE id list in the displayed
+  // order (first = position 1 = top). Resolves true on success so reorder mode
+  // exits; false (403/422/other) so the local order reverts to the previous one.
+  onReorder: (roleIds: string[]) => Promise<boolean>
 }
 
 // HU-2: the backend's permission vocabulary (lowercase) paired with the Spanish
@@ -65,11 +77,15 @@ export default function RolesModal({
   canAdministrate = false,
   createBusy = false,
   updateBusy = false,
+  reorderBusy = false,
+  isOwner = false,
+  ownRolePosition = null,
   onClose,
   onDelete,
   onSetDefault,
   onCreate,
   onUpdatePermissions,
+  onReorder,
 }: RolesModalProps) {
   // HU-1: inline "Crear rol" input. `creating` toggles the field; `newRoleName`
   // holds its draft. Reset whenever the modal is closed so it reopens clean.
@@ -81,12 +97,19 @@ export default function RolesModal({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftPerms, setDraftPerms] = useState<string[]>([])
 
+  // HU-6: reorder mode. `reordering` toggles the ↑/↓ layout; `order` is the local
+  // working copy the arrows mutate until saved (or discarded on cancel/error).
+  const [reordering, setReordering] = useState(false)
+  const [order, setOrder] = useState<ServerRole[]>([])
+
   useEffect(() => {
     if (!visible) {
       setCreating(false)
       setNewRoleName("")
       setEditingId(null)
       setDraftPerms([])
+      setReordering(false)
+      setOrder([])
     }
   }, [visible])
 
@@ -135,6 +158,59 @@ export default function RolesModal({
     }
   }
 
+  // HU-6 (CA2): a role is locked for a non-owner when it sits at their own level
+  // or above (position <= their own). The owner is exempt; a non-owner with no
+  // non-default role (ownRolePosition == null) can't move anything. This is a
+  // helper — the backend stays the final authority and still answers 403.
+  const isLocked = (role: ServerRole): boolean => {
+    if (isOwner) return false
+    if (ownRolePosition == null) return true
+    return role.position <= ownRolePosition
+  }
+
+  // HU-6: enter reorder mode, seeding the working order from the current list.
+  const enterReorder = () => {
+    setCreating(false)
+    setNewRoleName("")
+    setEditingId(null)
+    setDraftPerms([])
+    setOrder([...roles])
+    setReordering(true)
+  }
+
+  // Cancel reverts to the original order and exits reorder mode (no API call).
+  const cancelReorder = () => {
+    setReordering(false)
+    setOrder([])
+  }
+
+  // HU-6: swap a role one slot up (-1) or down (+1) in local state only. Blocked
+  // when either the role or its swap target is locked, so a non-owner can neither
+  // move a protected role nor raise a role into a protected slot (CA2).
+  const moveRole = (index: number, dir: -1 | 1) => {
+    const target = index + dir
+    if (target < 0 || target >= order.length) return
+    if (isLocked(order[index]) || isLocked(order[target])) return
+    setOrder((prev) => {
+      const next = [...prev]
+      ;[next[index], next[target]] = [next[target], next[index]]
+      return next
+    })
+  }
+
+  // Save sends the COMPLETE id list in the displayed order. On success reorder
+  // mode exits and the parent replaces the list with the backend response; on any
+  // error the local order reverts to the previous one (the parent surfaced why).
+  const handleSaveOrder = async () => {
+    const ok = await onReorder(order.map((r) => r.id))
+    if (ok) {
+      setReordering(false)
+      setOrder([])
+    } else {
+      setOrder([...roles])
+    }
+  }
+
   return (
     <ModalShell
       visible={visible}
@@ -148,8 +224,9 @@ export default function RolesModal({
         </View>
       ) : null}
 
-      {/* HU-1: create a role. Collapsed to a single button until used. */}
-      {creating ? (
+      {/* HU-1: create a role. Collapsed to a single button until used. Hidden
+          while reordering, which takes over the modal body (HU-6). */}
+      {!reordering && (creating ? (
         <View style={{ marginBottom: 14, gap: 8 }}>
           <TextInput
             value={newRoleName}
@@ -199,9 +276,92 @@ export default function RolesModal({
           <Ionicons name="add" size={16} color="#37D6C0" />
           <Text style={{ color: "#37D6C0", fontSize: 13, fontWeight: "700" }}>Crear rol</Text>
         </PressableScale>
-      )}
+      ))}
 
-      {loading ? (
+      {/* HU-6: enter reorder mode. Shown only to someone who can manage roles
+          (the exact same canAdministrate gate the parent uses to open this
+          modal), when there are roles and nothing else is mid-edit. */}
+      {!reordering && canAdministrate && roles.length > 0 && !creating && editingId === null ? (
+        <PressableScale
+          onPress={enterReorder}
+          accessibilityLabel="Reordenar la jerarquía de roles"
+          hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
+          style={CREATE_BTN}
+        >
+          <Ionicons name="swap-vertical" size={16} color="#37D6C0" />
+          <Text style={{ color: "#37D6C0", fontSize: 13, fontWeight: "700" }}>Reordenar</Text>
+        </PressableScale>
+      ) : null}
+
+      {reordering ? (
+        <>
+          <Text style={{ color: "#8DA8AC", fontSize: 12, marginBottom: 10 }}>
+            El primero es la posición 1 (la más alta). Usá las flechas para cambiar el orden.
+          </Text>
+          <ScrollView style={{ maxHeight: 300 }}>
+            {order.map((role, index) => {
+              const locked = isLocked(role)
+              const upDisabled =
+                reorderBusy || index === 0 || locked || isLocked(order[index - 1])
+              const downDisabled =
+                reorderBusy || index === order.length - 1 || locked || isLocked(order[index + 1])
+              return (
+                <View key={role.id} style={ROW}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: "#E6F3F3", fontSize: 14, fontWeight: "600" }} numberOfLines={1}>
+                      {role.name}
+                    </Text>
+                    <Text style={{ color: "#8DA8AC", fontSize: 11, marginTop: 2 }}>
+                      {locked ? "A tu nivel o por encima" : `Posición ${index + 1}`}
+                    </Text>
+                  </View>
+                  <PressableScale
+                    onPress={() => moveRole(index, -1)}
+                    disabled={upDisabled}
+                    accessibilityLabel={`Subir el rol ${role.name}`}
+                    hoverStyle={upDisabled ? undefined : { backgroundColor: "rgba(55,214,192,0.22)" }}
+                    style={{ ...ARROW_BTN, opacity: upDisabled ? 0.35 : 1 }}
+                  >
+                    <Ionicons name="arrow-up" size={16} color="#37D6C0" />
+                  </PressableScale>
+                  <PressableScale
+                    onPress={() => moveRole(index, 1)}
+                    disabled={downDisabled}
+                    accessibilityLabel={`Bajar el rol ${role.name}`}
+                    hoverStyle={downDisabled ? undefined : { backgroundColor: "rgba(55,214,192,0.22)" }}
+                    style={{ ...ARROW_BTN, opacity: downDisabled ? 0.35 : 1 }}
+                  >
+                    <Ionicons name="arrow-down" size={16} color="#37D6C0" />
+                  </PressableScale>
+                </View>
+              )
+            })}
+          </ScrollView>
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
+            <PressableScale
+              onPress={handleSaveOrder}
+              disabled={reorderBusy}
+              accessibilityLabel="Guardar el nuevo orden de roles"
+              style={{ ...PRIMARY_BTN, opacity: reorderBusy ? 0.6 : 1 }}
+            >
+              {reorderBusy ? (
+                <ActivityIndicator color="#04211D" size="small" />
+              ) : (
+                <Text style={PRIMARY_TXT}>Guardar orden</Text>
+              )}
+            </PressableScale>
+            <PressableScale
+              onPress={cancelReorder}
+              disabled={reorderBusy}
+              accessibilityLabel="Cancelar el reordenamiento"
+              hoverStyle={{ backgroundColor: "rgba(255,255,255,0.08)" }}
+              style={SECONDARY_BTN}
+            >
+              <Text style={{ color: "#8DA8AC", fontSize: 14, fontWeight: "600" }}>Cancelar</Text>
+            </PressableScale>
+          </View>
+        </>
+      ) : loading ? (
         <View style={{ paddingVertical: 28, alignItems: "center" }}>
           <ActivityIndicator color="#37D6C0" />
         </View>
@@ -422,6 +582,14 @@ const DEFAULT_BADGE_TXT: TextStyle = {
   color: "#37D6C0",
   fontSize: 11.5,
   fontWeight: "700",
+}
+const ARROW_BTN: ViewStyle = {
+  width: 34,
+  height: 34,
+  borderRadius: 8,
+  alignItems: "center",
+  justifyContent: "center",
+  backgroundColor: "rgba(55,214,192,0.12)",
 }
 const CREATE_BTN: ViewStyle = {
   flexDirection: "row",

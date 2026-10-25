@@ -22,7 +22,8 @@ permissions:
 jobs:
   apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # La cola del plan gratis de EAS puede superar los 90 min en horas pico.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 

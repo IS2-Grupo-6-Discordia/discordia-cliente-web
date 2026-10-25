@@ -47,6 +47,20 @@ import PressableScale from "@/components/PressableScale"
 
 const SERVER_NAME_MAX = 100
 
+// Icon rules mirrored from the backend (microservicio-servidores): it accepts
+// only these content types and rejects files over 5 MB with a 422. Validating
+// client-side gives instant feedback and avoids a doomed upload round-trip.
+const ICON_MAX_BYTES = 5 * 1024 * 1024
+const ICON_ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"]
+const ICON_FORMAT_ERROR = "Formato de ícono no soportado. Usá JPEG, PNG o WebP."
+const ICON_SIZE_ERROR = "El ícono no puede superar los 5 MB."
+const NAME_TOO_LONG_ERROR = `El nombre del servidor no puede superar los ${SERVER_NAME_MAX} caracteres.`
+
+// HU-5: the backend rejects an owner's leave attempt with 409. We block it in
+// the UI too and explain the only two ways out (same wording the backend uses).
+const OWNER_LEAVE_NOTICE =
+  "Sos el dueño de este servidor. Para abandonarlo, primero transferí la propiedad a otro miembro o eliminá el servidor."
+
 // Rail servers with non-UUID ids ("1".."4") are mock/example servers. Real
 // backend actions (invite, leave...) only make sense against a real server id.
 const UUID_RE =
@@ -471,10 +485,31 @@ export default function ChatScreen() {
     if (result.canceled) return
     const asset = result.assets[0]
     if (!asset) return
+
+    // CA3: reject unsupported formats and oversized files before sending,
+    // mirroring the backend (JPEG/PNG/WebP, max 5 MB) so the user gets instant,
+    // specific feedback instead of a failed upload round-trip.
     if (Platform.OS === "web") {
       const blob = await (await fetch(asset.uri)).blob()
+      if (!ICON_ALLOWED_TYPES.includes(blob.type)) {
+        setCreateError(ICON_FORMAT_ERROR)
+        return
+      }
+      if (blob.size > ICON_MAX_BYTES) {
+        setCreateError(ICON_SIZE_ERROR)
+        return
+      }
       setServerIcon(blob)
     } else {
+      const type = asset.mimeType ?? ""
+      if (type !== "" && !ICON_ALLOWED_TYPES.includes(type)) {
+        setCreateError(ICON_FORMAT_ERROR)
+        return
+      }
+      if (typeof asset.fileSize === "number" && asset.fileSize > ICON_MAX_BYTES) {
+        setCreateError(ICON_SIZE_ERROR)
+        return
+      }
       setServerIcon({
         uri: asset.uri,
         name: asset.fileName ?? "icon.jpg",
@@ -488,6 +523,10 @@ export default function ChatScreen() {
     const name = serverName.trim()
     if (name === "") {
       setCreateError("Poné un nombre para el servidor.")
+      return
+    }
+    if (name.length > SERVER_NAME_MAX) {
+      setCreateError(NAME_TOO_LONG_ERROR)
       return
     }
     setCreateBusy(true)
@@ -831,6 +870,12 @@ export default function ChatScreen() {
       setLeaveError(MOCK_SERVER_NOTICE)
       return
     }
+    // CA (HU-5): the owner can't just leave — defense in depth in case the UI
+    // ever surfaces the action to an owner, so we never fire a doomed request.
+    if (isOwner) {
+      setLeaveError(OWNER_LEAVE_NOTICE)
+      return
+    }
     setLeaveBusy(true)
     try {
       await leaveServer(activeServer)
@@ -841,7 +886,12 @@ export default function ChatScreen() {
       }
       setLeaveOpen(false)
     } catch (err) {
-      setLeaveError(friendlyError(err))
+      // The backend rejects an owner leave with 409 -> show the same guidance.
+      if (err instanceof ApiError && err.status === 409) {
+        setLeaveError(OWNER_LEAVE_NOTICE)
+      } else {
+        setLeaveError(friendlyError(err))
+      }
     } finally {
       setLeaveBusy(false)
     }
@@ -1696,14 +1746,27 @@ export default function ChatScreen() {
               </View>
             ) : null}
             <Text style={LABEL}>Nombre del servidor</Text>
+            {/* CA2: no silent cap — let the user exceed the limit and show why,
+                with a live counter aligned to the backend's max of 100. */}
             <TextInput
               value={serverName}
               onChangeText={setServerName}
               placeholder="Ej: FIUBA · IS2"
               placeholderTextColor="#5E7E82"
-              maxLength={SERVER_NAME_MAX}
-              style={[FIELD, { marginBottom: 16 }]}
+              style={[FIELD, { marginBottom: 6 }]}
             />
+            <Text
+              style={{
+                color: serverName.trim().length > SERVER_NAME_MAX ? "#FF9E94" : "#5E7E82",
+                fontSize: 11,
+                textAlign: "right",
+                marginBottom: 16,
+              }}
+            >
+              {serverName.trim().length > SERVER_NAME_MAX
+                ? NAME_TOO_LONG_ERROR
+                : `${serverName.trim().length}/${SERVER_NAME_MAX}`}
+            </Text>
             <Text style={LABEL}>Ícono</Text>
             <TouchableOpacity
               onPress={handlePickIcon}
@@ -1740,8 +1803,14 @@ export default function ChatScreen() {
             </TouchableOpacity>
             <PressableScale
               onPress={handleCreateServer}
-              disabled={createBusy}
-              style={[PRIMARY_BTN, { marginTop: 18, opacity: createBusy ? 0.7 : 1 }]}
+              disabled={createBusy || serverName.trim().length > SERVER_NAME_MAX}
+              style={[
+                PRIMARY_BTN,
+                {
+                  marginTop: 18,
+                  opacity: createBusy || serverName.trim().length > SERVER_NAME_MAX ? 0.7 : 1,
+                },
+              ]}
             >
               {createBusy ? <ActivityIndicator color="#04211D" /> : <Text style={PRIMARY_TXT}>Crear servidor</Text>}
             </PressableScale>
@@ -2121,56 +2190,85 @@ export default function ChatScreen() {
         onClose={() => setLeaveOpen(false)}
         title="Abandonar servidor"
       >
-        <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 18 }}>
-          ¿Seguro que querés abandonar{" "}
-          <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>
-            {servers.find((s) => s.id === activeServer)?.name ?? "este servidor"}
-          </Text>
-          ? Vas a perder el acceso a sus canales.
-        </Text>
+        {/* CA (HU-5): the owner is blocked from leaving — explain the only two
+            ways out (transfer or delete) instead of offering the destructive
+            action. Non-owners get the normal confirmation flow. */}
+        {isOwner ? (
+          <>
+            <View style={NOTICE_ERROR}>
+              <Text style={{ color: "#FF9E94", fontSize: 12.5, lineHeight: 18 }}>
+                {OWNER_LEAVE_NOTICE}
+              </Text>
+            </View>
+            <PressableScale
+              onPress={() => setLeaveOpen(false)}
+              hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
+              style={{
+                borderRadius: 10,
+                paddingVertical: 12,
+                alignItems: "center",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.10)",
+                backgroundColor: "rgba(255,255,255,0.06)",
+              }}
+            >
+              <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Entendido</Text>
+            </PressableScale>
+          </>
+        ) : (
+          <>
+            <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 18 }}>
+              ¿Seguro que querés abandonar{" "}
+              <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>
+                {servers.find((s) => s.id === activeServer)?.name ?? "este servidor"}
+              </Text>
+              ? Vas a perder el acceso a sus canales.
+            </Text>
 
-        {leaveError ? (
-          <View style={NOTICE_ERROR}>
-            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{leaveError}</Text>
-          </View>
-        ) : null}
+            {leaveError ? (
+              <View style={NOTICE_ERROR}>
+                <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{leaveError}</Text>
+              </View>
+            ) : null}
 
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <PressableScale
-            onPress={() => setLeaveOpen(false)}
-            disabled={leaveBusy}
-            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
-            style={{
-              flex: 1,
-              borderRadius: 10,
-              paddingVertical: 12,
-              alignItems: "center",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.10)",
-              backgroundColor: "rgba(255,255,255,0.06)",
-            }}
-          >
-            <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
-          </PressableScale>
-          <PressableScale
-            onPress={handleLeaveServer}
-            disabled={leaveBusy}
-            style={{
-              flex: 1,
-              borderRadius: 10,
-              paddingVertical: 12,
-              alignItems: "center",
-              backgroundColor: "#FF7F72",
-              opacity: leaveBusy ? 0.7 : 1,
-            }}
-          >
-            {leaveBusy ? (
-              <ActivityIndicator color="#04211D" />
-            ) : (
-              <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>Abandonar</Text>
-            )}
-          </PressableScale>
-        </View>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <PressableScale
+                onPress={() => setLeaveOpen(false)}
+                disabled={leaveBusy}
+                hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
+                style={{
+                  flex: 1,
+                  borderRadius: 10,
+                  paddingVertical: 12,
+                  alignItems: "center",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,255,255,0.10)",
+                  backgroundColor: "rgba(255,255,255,0.06)",
+                }}
+              >
+                <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
+              </PressableScale>
+              <PressableScale
+                onPress={handleLeaveServer}
+                disabled={leaveBusy}
+                style={{
+                  flex: 1,
+                  borderRadius: 10,
+                  paddingVertical: 12,
+                  alignItems: "center",
+                  backgroundColor: "#FF7F72",
+                  opacity: leaveBusy ? 0.7 : 1,
+                }}
+              >
+                {leaveBusy ? (
+                  <ActivityIndicator color="#04211D" />
+                ) : (
+                  <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>Abandonar</Text>
+                )}
+              </PressableScale>
+            </View>
+          </>
+        )}
       </ModalShell>
 
       {/* Transfer ownership (HU-7) */}

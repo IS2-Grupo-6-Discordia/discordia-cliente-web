@@ -78,6 +78,31 @@ export interface ChannelOverwrite {
   deny: string[]
 }
 
+// HU-25/26: an active ban. Names come from the auth service, like members.
+export interface ServerBan {
+  userId: string
+  name: string
+  avatar: string
+  avatarUrl: string | null
+  bannedBy: string
+  bannedByName: string
+  reason: string | null
+  createdAt: string
+}
+
+// What the current user may do in a server. `permissions` are the backend's
+// lowercase names ("ban_members", ...). Only used to hide actions that would
+// fail: the backend checks every action again.
+export interface MyServerPermissions {
+  isOwner: boolean
+  permissions: string[]
+}
+
+export function hasServerPermission(perms: MyServerPermissions | null, name: string): boolean {
+  if (!perms) return false
+  return perms.isOwner || perms.permissions.includes("administrator") || perms.permissions.includes(name)
+}
+
 export type TransferStatus = "pending" | "accepted" | "rejected" | "cancelled"
 
 // HU-7: an ownership transfer between the current owner (from) and a member (to).
@@ -149,3 +174,18 @@ export interface Message {
   reactions?: { emoji: string; count: number; mine?: boolean }[]
 }
 
+
+// HU-17: what POST /voice/channels/{id}/join hands back. `url` is the LiveKit
+// server (wss://...) and `token` a short-lived JWT scoped to that one room.
+export interface VoiceJoinResponse {
+  url: string
+  token: string
+}
+
+// HU-20: one entry of GET /voice/channels/{id}/participants and of the
+// realtime `voice.participants` snapshot. Names come from /auth/users/batch.
+export interface VoicePresenceParticipant {
+  user_id: string
+  microphone_muted: boolean
+  joined_at: string
+}

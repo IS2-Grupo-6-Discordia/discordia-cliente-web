@@ -134,7 +134,9 @@ export default function RolesModal({
   // The non-chip part of a row's subtitle: an admin role is summarized by name,
   // every other role by its permission count.
   const permsSummary = (role: ServerRole): string => {
-    if (role.permissions.includes(ADMIN_PERMISSION)) return "Rol de administración"
+    // Administrator is a wildcard the backend reads as every permission, so the
+    // count would read "1 permiso" and mislead — show its real reach instead.
+    if (role.permissions.includes(ADMIN_PERMISSION)) return "Todos los permisos"
     const n = role.permissions.length
     return `${n} ${n === 1 ? "permiso" : "permisos"}`
   }

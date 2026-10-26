@@ -23,7 +23,7 @@ const GOOGLE_UNAVAILABLE =
   "No pudimos conectarnos con Google. Ingresá con tu email y contraseña o probá de nuevo en un rato."
 
 export default function LoginScreen() {
-  const { setUser, signedOutReason, clearSignedOutReason } = useAuth()
+  const { setUser, signedOutReason, showSignedOutReason, clearSignedOutReason } = useAuth()
   const wake = useWakeState()
   const router = useRouter()
   // Deep-link flow: when a logged-out user opens an invite, we arrive here with
@@ -57,6 +57,7 @@ export default function LoginScreen() {
         err instanceof TypeError ||
         (err instanceof Error && err.name === "AbortError")
       if (unavailable) setGoogleNotice(GOOGLE_UNAVAILABLE)
+      else if (err instanceof ApiError && err.status === 403) showSignedOutReason("suspended")
       else setError(friendlyError(err))
     } finally {
       setGoogleLoading(false)
@@ -78,7 +79,8 @@ export default function LoginScreen() {
       setUser(res.user)
       router.replace(safeRedirect(redirect))
     } catch (err) {
-      setError(friendlyError(err))
+      if (err instanceof ApiError && err.status === 403) showSignedOutReason("suspended")
+      else setError(friendlyError(err))
     } finally {
       setLoading(false)
     }

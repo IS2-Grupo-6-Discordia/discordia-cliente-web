@@ -7,10 +7,11 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from "react-native"
-import { useRouter } from "expo-router"
+import { useLocalSearchParams, useRouter } from "expo-router"
 import { useAuth } from "@/context/AuthContext"
 import { register } from "@/api/auth"
 import { friendlyError } from "@/api/client"
+import { safeRedirect } from "@/lib/safeRedirect"
 import AuthBrand from "@/components/AuthBrand"
 import AuthField from "@/components/AuthField"
 
@@ -52,6 +53,9 @@ function Req({ met, text }: { met: boolean; text: string }) {
 export default function RegisterScreen() {
   const { setUser } = useAuth()
   const router = useRouter()
+  // Preserve an invite deep-link across register -> login so the destination
+  // survives the whole sign-up flow. Validated before use (open-redirect guard).
+  const { redirect } = useLocalSearchParams<{ redirect?: string }>()
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [pw, setPw] = useState("")
@@ -76,7 +80,8 @@ export default function RegisterScreen() {
     try {
       const res = await register(name, email, pw)
       setUser(res.user)
-      router.replace("/(main)/chat")
+      // Register signs the user in, so honor the invite redirect directly.
+      router.replace(safeRedirect(redirect))
     } catch (err) {
       const msg = err instanceof Error ? err.message : ""
       if (msg === "EMAIL_DUPLICADO") {
@@ -217,7 +222,15 @@ export default function RegisterScreen() {
           {/* Back to login */}
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 12, gap: 4 }}>
             <Text style={{ color: "#8DA8AC", fontSize: 12 }}>¿Ya tenés cuenta?</Text>
-            <TouchableOpacity onPress={() => router.push("/(auth)/login")}>
+            <TouchableOpacity
+              onPress={() =>
+                router.push(
+                  redirect
+                    ? { pathname: "/(auth)/login", params: { redirect } }
+                    : "/(auth)/login",
+                )
+              }
+            >
               <Text style={{ color: "#37D6C0", fontWeight: "600", fontSize: 12 }}>Iniciá sesión</Text>
             </TouchableOpacity>
           </View>

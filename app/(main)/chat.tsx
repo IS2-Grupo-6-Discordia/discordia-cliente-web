@@ -465,10 +465,22 @@ export default function ChatScreen() {
       .catch(() => setBannerError("No pudimos cargar tus servidores. Probá de nuevo en un rato."))
   }, [])
 
+  // When another screen asks for a server (e.g. the invite deep link navigates
+  // here with ?serverId=...), select it. If it isn't in the list yet — the user
+  // just joined and this screen mounted before/around the join — refetch once so
+  // it appears, and the branch above activates it on the next run.
+  const refetchedForServerId = useRef<string | null>(null)
   useEffect(() => {
-    if (requestedServerId && servers.some((s) => s.id === requestedServerId)) {
+    if (!requestedServerId) return
+    if (servers.some((s) => s.id === requestedServerId)) {
       setActiveServer(requestedServerId)
+      return
     }
+    if (refetchedForServerId.current === requestedServerId) return
+    refetchedForServerId.current = requestedServerId
+    getServers()
+      .then((list) => setServers(list))
+      .catch(() => setBannerError("No pudimos cargar tus servidores. Probá de nuevo en un rato."))
   }, [requestedServerId, servers])
 
   useEffect(() => {

@@ -24,6 +24,12 @@ export const ADMIN_PERMISSION = "administrator"
 // whether to surface role management.
 export const MANAGE_ROLES_PERMISSION = "manage_roles"
 
+// The backend's "create invite" permission string. A member needs it (or
+// ADMINISTRATOR, or being the owner) to generate invitations; the backend
+// enforces it on POST /servers/{id}/invites, and the UI reads it to decide
+// whether to show the "Invitar" action.
+export const CREATE_INVITE_PERMISSION = "create_invite"
+
 // Reads always stay mocked: the backend does NOT expose GET /servers,
 // GET categories, or GET roles endpoints yet, so there is nothing to call.
 const READ_USE_MOCK = false

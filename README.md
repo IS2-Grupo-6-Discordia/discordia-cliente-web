@@ -30,4 +30,10 @@ npx eas-cli build -p android --profile development    # development build para d
 - Los perfiles están en `eas.json`. `EXPO_PUBLIC_API_URL` se fija **al compilar** (en `env` de cada
   perfil): cambiarla exige otra build. Los `.env` locales no se suben a EAS.
 - Con el perfil `development`, se instala la APK y después se corre `npx expo start --dev-client`.
-- El login con Google es solo web: en la APK se entra con email y contraseña.
+- El login con Google funciona en web y en la APK. En web usa Google Identity Services; en Android,
+  `@react-native-google-signin/google-signin` pidiendo el `idToken` con el client ID **web**
+  (`webClientId`), que es el que valida el backend. Para que Android lo permita, en Google Cloud
+  tiene que existir un cliente OAuth de tipo **Android** con el paquete `com.discordia.app` y el
+  SHA-1 del keystore con el que EAS firma la APK (`npx eas-cli credentials -p android`). Sin ese
+  cliente, el selector de cuenta falla con `DEVELOPER_ERROR` y la app muestra el aviso de Google
+  no disponible. No funciona en Expo Go: hace falta una build de EAS.

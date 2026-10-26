@@ -8,12 +8,13 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from "react-native"
-import { useRouter } from "expo-router"
+import { useLocalSearchParams, useRouter } from "expo-router"
 import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
 import { login, loginWithGoogle } from "@/api/auth"
 import { useWakeState, wakeBackends } from "@/api/wake"
 import { ApiError, friendlyError } from "@/api/client"
+import { safeRedirect } from "@/lib/safeRedirect"
 import PressableScale from "@/components/PressableScale"
 import AuthField from "@/components/AuthField"
 import GoogleSignInButton, { isGoogleSignInAvailable } from "@/components/GoogleSignInButton"
@@ -25,6 +26,10 @@ export default function LoginScreen() {
   const { setUser, signedOutReason, clearSignedOutReason } = useAuth()
   const wake = useWakeState()
   const router = useRouter()
+  // Deep-link flow: when a logged-out user opens an invite, we arrive here with
+  // `?redirect=/invite/<code>` so we can send them back once authenticated.
+  // The value is validated (open-redirect guard) right before we navigate.
+  const { redirect } = useLocalSearchParams<{ redirect?: string }>()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
@@ -43,7 +48,9 @@ export default function LoginScreen() {
       const res = await loginWithGoogle(idToken)
       clearSignedOutReason()
       setUser(res.user)
-      router.replace("/(main)/chat")
+      // Google uses popup ux_mode, so this page never unloaded and the redirect
+      // param is still here. Validate it before trusting it.
+      router.replace(safeRedirect(redirect))
     } catch (err) {
       const unavailable =
         (err instanceof ApiError && err.status >= 500) ||
@@ -69,7 +76,7 @@ export default function LoginScreen() {
       const res = await login(email, password)
       clearSignedOutReason()
       setUser(res.user)
-      router.replace("/(main)/chat")
+      router.replace(safeRedirect(redirect))
     } catch (err) {
       setError(friendlyError(err))
     } finally {
@@ -325,7 +332,15 @@ export default function LoginScreen() {
           {/* Register link */}
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 16, gap: 4 }}>
             <Text style={{ color: "#8DA8AC", fontSize: 12 }}>¿Todavía no tenés cuenta?</Text>
-            <TouchableOpacity onPress={() => router.push("/(auth)/register")}>
+            <TouchableOpacity
+              onPress={() =>
+                router.push(
+                  redirect
+                    ? { pathname: "/(auth)/register", params: { redirect } }
+                    : "/(auth)/register",
+                )
+              }
+            >
               <Text style={{ color: "#37D6C0", fontWeight: "600", fontSize: 12 }}>Registrate</Text>
             </TouchableOpacity>
           </View>

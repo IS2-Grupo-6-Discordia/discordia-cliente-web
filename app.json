@@ -14,7 +14,21 @@
       "adaptiveIcon": {
         "backgroundColor": "#0A1620"
       },
-      "package": "com.discordia.app"
+      "package": "com.discordia.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "discordia-cliente-web.vercel.app",
+              "pathPrefix": "/invite"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"

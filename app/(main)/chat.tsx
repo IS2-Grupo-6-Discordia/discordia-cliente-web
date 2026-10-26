@@ -7,6 +7,7 @@ import {
   ScrollView,
   FlatList,
   Platform,
+  Keyboard,
   ActivityIndicator,
   Image,
   useWindowDimensions,
@@ -261,8 +262,27 @@ const PRESENCE_REFRESH_MS = 15_000
 // Below this width (phones) the three columns don't fit: the screen shows one
 // pane at a time (channels or chat) and the member list slides over the content.
 const NARROW_BREAKPOINT = 768
+function useKeyboardOverlap(ref: React.RefObject<View | null>) {
+  const [overlap, setOverlap] = useState(0)
+  useEffect(() => {
+    if (Platform.OS === "web") return
+    const ios = Platform.OS === "ios"
+    const onShow = Keyboard.addListener(ios ? "keyboardWillChangeFrame" : "keyboardDidShow", (e) => {
+      const keyboardTop = e.endCoordinates.screenY
+      ref.current?.measureInWindow((_x, y, _w, h) => setOverlap(Math.max(0, Math.round(y + h - keyboardTop))))
+    })
+    const onHide = Keyboard.addListener(ios ? "keyboardWillHide" : "keyboardDidHide", () => setOverlap(0))
+    return () => {
+      onShow.remove()
+      onHide.remove()
+    }
+  }, [ref])
+  return overlap
+}
 
 export default function ChatScreen() {
+  const rootRef = useRef<View>(null)
+  const keyboardOverlap = useKeyboardOverlap(rootRef)
   const router = useRouter()
   const { serverId: requestedServerId } = useLocalSearchParams<{ serverId?: string }>()
   const { user } = useAuth()
@@ -466,10 +486,22 @@ export default function ChatScreen() {
       .catch(() => setBannerError("No pudimos cargar tus servidores. Probá de nuevo en un rato."))
   }, [])
 
+  // When another screen asks for a server (e.g. the invite deep link navigates
+  // here with ?serverId=...), select it. If it isn't in the list yet — the user
+  // just joined and this screen mounted before/around the join — refetch once so
+  // it appears, and the branch above activates it on the next run.
+  const refetchedForServerId = useRef<string | null>(null)
   useEffect(() => {
-    if (requestedServerId && servers.some((s) => s.id === requestedServerId)) {
+    if (!requestedServerId) return
+    if (servers.some((s) => s.id === requestedServerId)) {
       setActiveServer(requestedServerId)
+      return
     }
+    if (refetchedForServerId.current === requestedServerId) return
+    refetchedForServerId.current = requestedServerId
+    getServers()
+      .then((list) => setServers(list))
+      .catch(() => setBannerError("No pudimos cargar tus servidores. Probá de nuevo en un rato."))
   }, [requestedServerId, servers])
 
   useEffect(() => {
@@ -1775,7 +1807,7 @@ export default function ChatScreen() {
   )
 
   return (
-    <View style={{ flex: 1, flexDirection: "row" }}>
+    <View ref={rootRef} style={{ flex: 1, flexDirection: "row", paddingBottom: keyboardOverlap }}>
       {/* Server rail */}
       <View
         style={{

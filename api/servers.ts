@@ -222,12 +222,16 @@ interface BackendInviteOut {
 
 // Builds the shareable invite URL from the CURRENT origin, so the link matches
 // where the app is actually running: localhost in dev, the real domain in prod.
-// The backend's own `url` is ignored because it hardcodes its deploy host.
+// On native there is no `window`, so we fall back to the configured web URL
+// (EXPO_PUBLIC_WEB_URL) which must match the Android App Links host so the link
+// opens the app. The backend's own `url` is ignored because it hardcodes its host.
+const WEB_URL = process.env.EXPO_PUBLIC_WEB_URL ?? "https://discordia-cliente-web.vercel.app"
+
 function inviteUrl(code: string): string {
   const origin =
     typeof window !== "undefined" && window.location?.origin
       ? window.location.origin
-      : "https://discordia.app"
+      : WEB_URL
   return `${origin}/invite/${code}`
 }
 

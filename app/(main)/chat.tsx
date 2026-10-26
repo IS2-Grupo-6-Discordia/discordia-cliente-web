@@ -54,6 +54,7 @@ import {
   getRoleMembers,
   ADMIN_PERMISSION,
   MANAGE_ROLES_PERMISSION,
+  CREATE_INVITE_PERMISSION,
   getMyServerPermissions,
   banMember,
   listBans,
@@ -617,6 +618,18 @@ export default function ChatScreen() {
     (isOwner ||
       memberPermissions.includes(ADMIN_PERMISSION) ||
       memberPermissions.includes(MANAGE_ROLES_PERMISSION))
+
+  // Can create invitations: the backend enforces CREATE_INVITE on
+  // POST /servers/{id}/invites (the owner and ADMINISTRATOR always qualify), so
+  // the UI hides "Invitar" from a real-server member who lacks it instead of
+  // offering an action that would 403. Mock/example servers keep the button:
+  // they have no backend permission system and the modal shows a mock notice.
+  const canCreateInvite =
+    !!activeServer &&
+    (!isRealServerId(activeServer) ||
+      isOwner ||
+      memberPermissions.includes(ADMIN_PERMISSION) ||
+      memberPermissions.includes(CREATE_INVITE_PERMISSION))
 
   // Whether the owner may offer ownership to a given member row: only the owner,
   // only on real servers, and never the owner's own row.
@@ -1341,7 +1354,13 @@ export default function ChatScreen() {
       refreshInvites(activeServer)
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
-        setInviteError("No sos miembro de este servidor.")
+        // 403 is either "not a member" or "lacks create_invite" — the backend's
+        // detail says which, so surface it instead of assuming membership.
+        setInviteError(
+          typeof err.detail === "string"
+            ? err.detail
+            : "No tenés permiso para crear invitaciones en este servidor.",
+        )
       } else if (err instanceof ApiError && err.status === 404) {
         setInviteError("El servidor ya no existe.")
       } else {
@@ -1910,7 +1929,10 @@ export default function ChatScreen() {
         }}
       >
         {/* Server name header: name on its own row so long names stay readable,
-            actions on a compact row underneath. */}
+            actions on a compact row underneath. Hidden when no real server is
+            selected (e.g. the user has none) so Invitar/Salir never show for an
+            empty or example selection. */}
+        {isRealServerId(activeServer) ? (
         <View
           style={{ paddingHorizontal: 12, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.13)" }}
         >
@@ -1925,27 +1947,30 @@ export default function ChatScreen() {
           <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }} numberOfLines={2}>
             {servers.find((s) => s.id === activeServer)?.name ?? ""}
           </Text>
-          {/* Primary actions — available to every member. Invitar grows to
-              anchor the row; Salir keeps its natural width beside it. */}
+          {/* Primary actions. "Invitar" is gated on CREATE_INVITE (canCreateInvite):
+              when shown it grows to anchor the row; "Salir" keeps its natural width
+              beside it, and is always available to every member. */}
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
 
-            <PressableScale
-              onPress={handleGenerateInvite}
-              hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
-              style={{
-                flex: 1,
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 5,
-                paddingVertical: 6,
-                borderRadius: 8,
-                backgroundColor: "rgba(55,214,192,0.12)",
-              }}
-            >
-              <Ionicons name="person-add-outline" size={13} color="#37D6C0" />
-              <Text style={{ color: "#37D6C0", fontSize: 11.5, fontWeight: "700" }}>Invitar</Text>
-            </PressableScale>
+            {canCreateInvite ? (
+              <PressableScale
+                onPress={handleGenerateInvite}
+                hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
+                style={{
+                  flex: 1,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 5,
+                  paddingVertical: 6,
+                  borderRadius: 8,
+                  backgroundColor: "rgba(55,214,192,0.12)",
+                }}
+              >
+                <Ionicons name="person-add-outline" size={13} color="#37D6C0" />
+                <Text style={{ color: "#37D6C0", fontSize: 11.5, fontWeight: "700" }}>Invitar</Text>
+              </PressableScale>
+            ) : null}
             <PressableScale
               onPress={openLeaveModal}
               accessibilityLabel="Salir del servidor"
@@ -2046,6 +2071,7 @@ export default function ChatScreen() {
             </View>
           ) : null}
         </View>
+        ) : null}
 
         <ScrollView style={{ flex: 1 }}>
           {categories.map((cat) => (
@@ -2840,18 +2866,45 @@ export default function ChatScreen() {
                 <Text style={LABEL}>Link de invitación</Text>
                 <View
                   style={{
+                    flexDirection: "row",
+                    alignItems: "center",
                     borderRadius: 10,
-                    paddingHorizontal: 12,
-                    paddingVertical: 11,
+                    paddingLeft: 12,
+                    paddingRight: 6,
+                    paddingVertical: 5,
                     backgroundColor: "rgba(255,255,255,0.06)",
                     borderWidth: 1,
                     borderColor: "rgba(255,255,255,0.10)",
                     marginBottom: 8,
                   }}
                 >
-                  <Text selectable numberOfLines={1} style={{ color: "#E6F3F3", fontSize: 13 }}>
+                  <Text
+                    selectable
+                    numberOfLines={1}
+                    style={{ flex: 1, color: "#E6F3F3", fontSize: 13 }}
+                  >
                     {invite.url}
                   </Text>
+                  <PressableScale
+                    onPress={handleCopyInvite}
+                    hitSlop={8}
+                    accessibilityLabel="Copiar link de invitación"
+                    style={{
+                      marginLeft: 8,
+                      width: 32,
+                      height: 32,
+                      borderRadius: 8,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: "rgba(255,255,255,0.06)",
+                    }}
+                  >
+                    <Ionicons
+                      name={copied ? "checkmark" : "copy-outline"}
+                      size={16}
+                      color={copied ? "#4FD69C" : "#8DA8AC"}
+                    />
+                  </PressableScale>
                 </View>
                 <Text style={{ color: "#8DA8AC", fontSize: 11.5, marginBottom: 12 }}>
                   {`${formatInviteExpiry(invite.expiresAt)} · ${

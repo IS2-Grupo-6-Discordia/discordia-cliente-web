@@ -109,6 +109,78 @@ export function friendlyError(err: unknown): string {
   return "Ocurrió un error inesperado. Probá de nuevo."
 }
 
+const NO_REFRESH_PATHS = new Set([
+  "/auth/login",
+  "/auth/oauth/google",
+  "/auth/refresh",
+  "/auth/logout",
+  "/auth/users",
+])
+
+let refreshing: Promise<boolean> | null = null
+
+async function adoptStoredSession(staleToken: string): Promise<boolean> {
+  const storedToken = await AsyncStorage.getItem("discordia_token")
+  if (!storedToken || storedToken === staleToken) return false
+  token = storedToken
+  refreshToken = await AsyncStorage.getItem("discordia_refresh_token")
+  return true
+}
+
+async function renewSession(staleToken: string): Promise<boolean> {
+  if (await adoptStoredSession(staleToken)) return true
+  if (!refreshToken) return false
+
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+  } catch {
+    return false
+  }
+
+  if (!res.ok) return adoptStoredSession(staleToken)
+
+  const body = (await res.json()) as { access_token: string; refresh_token: string }
+  await setToken(body.access_token)
+  await setRefreshToken(body.refresh_token)
+  return true
+}
+
+function refreshSession(staleToken: string): Promise<boolean> {
+  if (!refreshing) {
+    refreshing = renewSession(staleToken).finally(() => {
+      refreshing = null
+    })
+  }
+  return refreshing
+}
+
+async function authorizedFetch(path: string, init: RequestInit): Promise<Response> {
+  const send = () => {
+    const headers: Record<string, string> = { ...(init.headers as Record<string, string>) }
+    if (token) headers["Authorization"] = `Bearer ${token}`
+    return fetch(`${API_BASE}${path}`, { ...init, headers })
+  }
+
+  const sentToken = token
+  let res = await send()
+
+  if (res.status === 401 && sentToken && !NO_REFRESH_PATHS.has(path) && (await refreshSession(sentToken))) {
+    res = await send()
+  }
+
+  if (res.status === 401) {
+    await setToken(null)
+    await setRefreshToken(null)
+  }
+
+  return res
+}
+
 export async function api<T>(
   path: string,
   options: RequestInit = {},
@@ -118,19 +190,7 @@ export async function api<T>(
     ...(options.headers as Record<string, string>),
   }
 
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`
-  }
-
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  })
-
-  if (res.status === 401) {
-    await setToken(null)
-    await setRefreshToken(null)
-  }
+  const res = await authorizedFetch(path, { ...options, headers })
 
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -160,22 +220,7 @@ export async function apiUpload<T>(
   formData: FormData,
   method: string = "POST",
 ): Promise<T> {
-  const headers: Record<string, string> = {}
-
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`
-  }
-
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    body: formData,
-    headers,
-  })
-
-  if (res.status === 401) {
-    await setToken(null)
-    await setRefreshToken(null)
-  }
+  const res = await authorizedFetch(path, { method, body: formData, headers: {} })
 
   if (!res.ok) {
     const text = await res.text().catch(() => "")

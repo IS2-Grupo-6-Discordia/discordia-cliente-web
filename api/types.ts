@@ -37,7 +37,22 @@ export interface Server {
   unread?: boolean
   mention?: number
   iconUrl?: string | null
+  bannerUrl?: string | null
   ownerId?: string
+}
+
+// A real role from the servers backend (GET /servers/{id}/roles), distinct from
+// `RoleGroup` (the demo roster grouping). `permissions` is the backend's own
+// free-form permission list; the admin permission is the string `administrator`.
+// `isDefault` is resolved client-side against the server's default role so the
+// UI can block its deletion (HU-5 / #92), which the backend rejects with 409.
+export interface ServerRole {
+  id: string
+  serverId: string
+  name: string
+  permissions: string[]
+  position: number
+  isDefault?: boolean
 }
 
 // A real server member, from the servers backend (user id + role) hydrated with
@@ -51,6 +66,41 @@ export interface ServerMember {
   avatarUrl: string | null
   status: PresenceStatus
   joinedAt: string
+}
+
+// HU-7: a per-channel permission overwrite for a role. `allow`/`deny` carry the
+// backend's own permission tokens; a permission listed in neither is inherited
+// (the role's normal server-level permission applies). `roleId` maps the
+// backend's snake_case `role_id`.
+export interface ChannelOverwrite {
+  roleId: string
+  allow: string[]
+  deny: string[]
+}
+
+// HU-25/26: an active ban. Names come from the auth service, like members.
+export interface ServerBan {
+  userId: string
+  name: string
+  avatar: string
+  avatarUrl: string | null
+  bannedBy: string
+  bannedByName: string
+  reason: string | null
+  createdAt: string
+}
+
+// What the current user may do in a server. `permissions` are the backend's
+// lowercase names ("ban_members", ...). Only used to hide actions that would
+// fail: the backend checks every action again.
+export interface MyServerPermissions {
+  isOwner: boolean
+  permissions: string[]
+}
+
+export function hasServerPermission(perms: MyServerPermissions | null, name: string): boolean {
+  if (!perms) return false
+  return perms.isOwner || perms.permissions.includes("administrator") || perms.permissions.includes(name)
 }
 
 export type TransferStatus = "pending" | "accepted" | "rejected" | "cancelled"
@@ -124,3 +174,18 @@ export interface Message {
   reactions?: { emoji: string; count: number; mine?: boolean }[]
 }
 
+
+// HU-17: what POST /voice/channels/{id}/join hands back. `url` is the LiveKit
+// server (wss://...) and `token` a short-lived JWT scoped to that one room.
+export interface VoiceJoinResponse {
+  url: string
+  token: string
+}
+
+// HU-20: one entry of GET /voice/channels/{id}/participants and of the
+// realtime `voice.participants` snapshot. Names come from /auth/users/batch.
+export interface VoicePresenceParticipant {
+  user_id: string
+  microphone_muted: boolean
+  joined_at: string
+}

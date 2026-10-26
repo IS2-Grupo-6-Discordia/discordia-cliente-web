@@ -25,7 +25,7 @@ interface BackendUser {
   created_at?: string
 }
 
-function initials(name: string): string {
+export function initials(name: string): string {
   const letters = name
     .trim()
     .split(/\s+/)

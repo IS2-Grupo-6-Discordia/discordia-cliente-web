@@ -27,6 +27,7 @@ import {
   revokeInvite,
   joinServer,
   leaveServer,
+  deleteServer,
   deleteChannel,
   updateChannel,
   reorderChannels,
@@ -35,17 +36,79 @@ import {
   getPendingTransfer,
   acceptOwnershipTransfer,
   rejectOwnershipTransfer,
+  updateServer,
+  getServerRoles,
+  getDefaultRoleId,
+  setDefaultRole,
+  deleteRole,
+  createRole,
+  updateRolePermissions,
+  reorderRoles,
+  getMemberPermissions,
+  getMemberRoles,
+  assignRoleToMember,
+  removeRoleFromMember,
+  getChannelOverwrites,
+  setChannelOverwrite,
+  deleteChannelOverwrite,
+  getRoleMembers,
+  ADMIN_PERMISSION,
+  MANAGE_ROLES_PERMISSION,
+  getMyServerPermissions,
+  banMember,
+  listBans,
+  unbanMember,
 } from "@/api"
-import type { Server, Category, RoleGroup, Member, ServerMember, Message, Invite, OwnershipTransfer } from "@/api/types"
+import type {
+  Server,
+  Category,
+  RoleGroup,
+  ServerRole,
+  Member,
+  ServerMember,
+  Message,
+  Invite,
+  OwnershipTransfer,
+  ChannelOverwrite,
+  ServerBan,
+  MyServerPermissions,
+} from "@/api/types"
+import { hasServerPermission } from "@/api/types"
 import { ApiError, friendlyError } from "@/api/client"
 import { useAuth } from "@/context/AuthContext"
+import { useVoice } from "@/context/VoiceContext"
+import type { VoiceParticipant } from "@/context/VoiceContext"
+import { useVoicePresence } from "@/lib/useVoicePresence"
 import { Ionicons } from "@expo/vector-icons"
 import Avatar from "@/components/Avatar"
 import StatusDot, { STATUS_LABELS } from "@/components/StatusDot"
 import ModalShell from "@/components/ModalShell"
 import PressableScale from "@/components/PressableScale"
+import DeleteServerModal from "@/components/DeleteServerModal"
+import ServerSettingsModal from "@/components/ServerSettingsModal"
+import RolesModal from "@/components/RolesModal"
+import RolePermissionsModal from "@/components/RolePermissionsModal"
+import MemberRolesModal from "@/components/MemberRolesModal"
+import RoleMembersModal from "@/components/RoleMembersModal"
+import ChannelPermissionsModal from "@/components/ChannelPermissionsModal"
+import MemberActionsMenu from "@/components/MemberActionsMenu"
+import type { MemberAction } from "@/components/MemberActionsMenu"
 
 const SERVER_NAME_MAX = 100
+
+// Icon rules mirrored from the backend (microservicio-servidores): it accepts
+// only these content types and rejects files over 5 MB with a 422. Validating
+// client-side gives instant feedback and avoids a doomed upload round-trip.
+const ICON_MAX_BYTES = 5 * 1024 * 1024
+const ICON_ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"]
+const ICON_FORMAT_ERROR = "Formato de ícono no soportado. Usá JPEG, PNG o WebP."
+const ICON_SIZE_ERROR = "El ícono no puede superar los 5 MB."
+const NAME_TOO_LONG_ERROR = `El nombre del servidor no puede superar los ${SERVER_NAME_MAX} caracteres.`
+
+// HU-5: the backend rejects an owner's leave attempt with 409. We block it in
+// the UI too and explain the only two ways out (same wording the backend uses).
+const OWNER_LEAVE_NOTICE =
+  "Sos el dueño de este servidor. Para abandonarlo, primero transferí la propiedad a otro miembro o eliminá el servidor."
 
 // Rail servers with non-UUID ids ("1".."4") are mock/example servers. Real
 // backend actions (invite, leave...) only make sense against a real server id.
@@ -54,6 +117,36 @@ const UUID_RE =
 
 function isRealServerId(id: string): boolean {
   return UUID_RE.test(id)
+}
+
+// HU-7: maps a channel-overwrite API failure to a user-safe Spanish message.
+// 403: lacking permission (or changing a permission you don't hold). 404: the
+// channel or role no longer exists. 422: the permission isn't valid for a
+// channel. Anything else falls back to the shared friendlyError mapping.
+function channelOverwriteError(err: unknown): string {
+  if (err instanceof ApiError && err.status === 403) {
+    return "No tenés permisos para cambiar los permisos de este canal o alguno de esos permisos."
+  }
+  if (err instanceof ApiError && err.status === 404) {
+    return "El canal o el rol ya no existe."
+  }
+  if (err instanceof ApiError && err.status === 422) {
+    return "Alguno de los permisos no es válido para un canal."
+  }
+  return friendlyError(err)
+}
+
+// HU-8: maps a "ver miembros por rol" API failure to a user-safe Spanish
+// message. 403: not a member or lacking MANAGE_ROLES. 404: the role (or server)
+// no longer exists. Anything else falls back to the shared friendlyError mapping.
+function viewRoleMembersError(err: unknown): string {
+  if (err instanceof ApiError && err.status === 403) {
+    return "No tenés permisos para ver los miembros de este rol."
+  }
+  if (err instanceof ApiError && err.status === 404) {
+    return "El rol ya no existe."
+  }
+  return friendlyError(err)
 }
 
 // HU-2 (CA1): invite configuration options. Values are what the backend expects:
@@ -164,10 +257,15 @@ const NOTICE_OK: ViewStyle = {
 
 const PRESENCE_REFRESH_MS = 15_000
 
+// Below this width (phones) the three columns don't fit: the screen shows one
+// pane at a time (channels or chat) and the member list slides over the content.
+const NARROW_BREAKPOINT = 768
+
 export default function ChatScreen() {
   const router = useRouter()
   const { serverId: requestedServerId } = useLocalSearchParams<{ serverId?: string }>()
   const { user } = useAuth()
+  const voice = useVoice()
   // No server is selected until the real list loads. Never default to a mock id,
   // or the app boots into a phantom server (and its mock channels/messages) even
   // when the user has none.
@@ -175,10 +273,12 @@ export default function ChatScreen() {
   const [activeChannel, setActiveChannel] = useState("")
   const [showMembers, setShowMembers] = useState(false)
   const [input, setInput] = useState("")
-
-  const { width: screenWidth } = useWindowDimensions()
-  const isNarrow = screenWidth < 720
-  const [channelSidebarOpen, setChannelSidebarOpen] = useState(false)
+  const { width: windowWidth } = useWindowDimensions()
+  const isNarrow = windowWidth < NARROW_BREAKPOINT
+  // Phones only: which single pane is on screen.
+  const [mobilePane, setMobilePane] = useState<"channels" | "chat">("channels")
+  // Bigger touch targets on phones for the small inline icon buttons.
+  const iconBtnPad = isNarrow ? 7 : 3
 
   // Web-only hover tooltip for the server rail: shows the full server name next
   // to its icon, so long names stay discoverable even when the icon is just an
@@ -187,7 +287,9 @@ export default function ChatScreen() {
   const [hoveredMember, setHoveredMember] = useState<string | null>(null)
 
   const showTooltip = (label: string) => (e: any) => {
-    if (Platform.OS !== "web") return
+    // Touch screens fire mouseenter on tap but never mouseleave: the tooltip
+    // would stay stuck over the header, so phones don't get it.
+    if (Platform.OS !== "web" || isNarrow) return
     const rect = e?.currentTarget?.getBoundingClientRect?.()
     if (rect) setTooltip({ label, y: rect.top + rect.height / 2 })
   }
@@ -228,6 +330,11 @@ export default function ChatScreen() {
   const [invitesError, setInvitesError] = useState("")
   const [revokingId, setRevokingId] = useState<string | null>(null)
 
+  // Join-voice confirmation (HU-17 CA1: the user confirms before connecting)
+  const [voiceJoinTarget, setVoiceJoinTarget] = useState<{ id: string; name: string } | null>(null)
+  const [voiceJoinBusy, setVoiceJoinBusy] = useState(false)
+  const [voiceJoinError, setVoiceJoinError] = useState("")
+
   // Delete-channel confirmation
   const [deleteChOpen, setDeleteChOpen] = useState(false)
   const [deleteChTarget, setDeleteChTarget] = useState<{ id: string; name: string } | null>(null)
@@ -254,6 +361,72 @@ export default function ChatScreen() {
   const [leaveBusy, setLeaveBusy] = useState(false)
   const [leaveError, setLeaveError] = useState("")
 
+  const [deleteSrvOpen, setDeleteSrvOpen] = useState(false)
+  const [deleteSrvBusy, setDeleteSrvBusy] = useState(false)
+  const [deleteSrvError, setDeleteSrvError] = useState("")
+
+  // Server settings (HU-4 / #95), banner-only for now. Admin-gated.
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsBusy, setSettingsBusy] = useState(false)
+  const [settingsError, setSettingsError] = useState("")
+
+  // Role manager (HU-5 / #92). Admin-gated.
+  const [rolesOpen, setRolesOpen] = useState(false)
+  const [rolesList, setRolesList] = useState<ServerRole[]>([])
+  const [rolesLoading, setRolesLoading] = useState(false)
+  const [rolesError, setRolesError] = useState("")
+  const [roleBusyId, setRoleBusyId] = useState("")
+  const [roleCreateBusy, setRoleCreateBusy] = useState(false)
+  const [roleUpdateBusy, setRoleUpdateBusy] = useState(false)
+  const [defaultRoleId, setDefaultRoleId] = useState<string | null>(null)
+  // HU-4: the role whose "Marcar como por defecto" request is in flight.
+  const [roleDefaultBusyId, setRoleDefaultBusyId] = useState("")
+  // HU-6: reorder hierarchy. `roleReorderBusy` flags the save request; the
+  // current user's own roles feed the client-side hierarchy helper (CA2).
+  const [roleReorderBusy, setRoleReorderBusy] = useState(false)
+  const [currentUserRoles, setCurrentUserRoles] = useState<ServerRole[]>([])
+  // HU-2: dedicated permission editor (drill-in from a role row). `rolePermsTarget`
+  // is the role being edited; it reuses roleUpdateBusy / rolesError for the save.
+  const [rolePermsOpen, setRolePermsOpen] = useState(false)
+  const [rolePermsTarget, setRolePermsTarget] = useState<ServerRole | null>(null)
+
+  // HU-3: per-member role assignment selector. Admin-gated (same condition as
+  // the role manager). `memberRolesList` is every server role; `memberAssignedIds`
+  // is the loaded set of ids the target member already has (pre-checked).
+  const [memberRolesOpen, setMemberRolesOpen] = useState(false)
+  const [memberRolesTarget, setMemberRolesTarget] = useState<{ id: string; name: string } | null>(null)
+  const [memberRolesList, setMemberRolesList] = useState<ServerRole[]>([])
+  const [memberAssignedIds, setMemberAssignedIds] = useState<string[]>([])
+  const [memberRolesLoading, setMemberRolesLoading] = useState(false)
+  const [memberRolesError, setMemberRolesError] = useState("")
+  const [memberRoleBusyId, setMemberRoleBusyId] = useState("")
+
+  // HU-8: read-only "ver miembros por rol" list. Admin-gated (same condition as
+  // the role manager). `roleMembersTarget` is the role being inspected (id+name);
+  // `roleMembersList` is the loaded members that have it.
+  const [roleMembersOpen, setRoleMembersOpen] = useState(false)
+  const [roleMembersTarget, setRoleMembersTarget] = useState<{ id: string; name: string } | null>(null)
+  const [roleMembersList, setRoleMembersList] = useState<ServerMember[]>([])
+  const [roleMembersLoading, setRoleMembersLoading] = useState(false)
+  const [roleMembersError, setRoleMembersError] = useState("")
+
+  // HU-7: per-channel role permission overrides. Admin-gated (same canAdministrate
+  // condition as the role manager). The channel being edited (editChTarget) is the
+  // target; `channelOverwrites` is the channel's loaded overwrites and
+  // `channelPermsList` every server role.
+  const [channelPermsOpen, setChannelPermsOpen] = useState(false)
+  const [channelPermsTarget, setChannelPermsTarget] = useState<{ id: string; name: string } | null>(null)
+  const [channelPermsList, setChannelPermsList] = useState<ServerRole[]>([])
+  const [channelOverwrites, setChannelOverwrites] = useState<ChannelOverwrite[]>([])
+  const [channelPermsLoading, setChannelPermsLoading] = useState(false)
+  const [channelPermsError, setChannelPermsError] = useState("")
+  const [channelPermsBusyId, setChannelPermsBusyId] = useState("")
+
+  // Admin permissions the current user holds in the active server, flattened
+  // from the backend's own role permissions (HU-4/HU-5 gating). Empty when the
+  // user isn't an admin or it couldn't be confirmed -> falls back to owner-only.
+  const [memberPermissions, setMemberPermissions] = useState<string[]>([])
+
   // Ownership transfer (HU-7)
   // Owner-initiated transfer modal.
   const [transferOpen, setTransferOpen] = useState(false)
@@ -267,6 +440,21 @@ export default function ChatScreen() {
   const [pendingTransfer, setPendingTransfer] = useState<OwnershipTransfer | null>(null)
   const [transferActionBusy, setTransferActionBusy] = useState(false)
   const [bannerError, setBannerError] = useState("")
+
+  // Moderation (HU-25 ban / HU-26 revoke). The caller's permissions in the
+  // active server decide which controls show up; the backend checks again.
+  const [myPerms, setMyPerms] = useState<MyServerPermissions | null>(null)
+  const [banTarget, setBanTarget] = useState<{ id: string; name: string } | null>(null)
+  const [banReason, setBanReason] = useState("")
+  const [banBusy, setBanBusy] = useState(false)
+  const [banError, setBanError] = useState("")
+  const [bansOpen, setBansOpen] = useState(false)
+  const [bans, setBans] = useState<ServerBan[]>([])
+  const [bansLoading, setBansLoading] = useState(false)
+  const [bansError, setBansError] = useState("")
+  const [unbanningId, setUnbanningId] = useState<string | null>(null)
+  // Shown when the user loses access to a server (banned, or it disappeared).
+  const [accessLostNotice, setAccessLostNotice] = useState("")
 
   useEffect(() => {
     getServers()
@@ -328,7 +516,13 @@ export default function ChatScreen() {
         .then((members) => {
           if (active) setRoles(membersToRoleGroups(members))
         })
-        .catch(() => undefined)
+        .catch((err) => {
+          // HU-25 fallback: a 403/404 here means we lost access (banned, or the
+          // server is gone) and the realtime notice didn't reach us.
+          if (active && err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+            dropServerLocallyRef.current(activeServer, "Ya no tenés acceso a este servidor.")
+          }
+        })
     }, PRESENCE_REFRESH_MS)
     return () => {
       active = false
@@ -345,6 +539,26 @@ export default function ChatScreen() {
       .then(setMessages)
       .catch(() => setMessages([]))
   }, [activeChannel])
+
+  // HU-4/HU-5 gating: load the current user's admin permissions for the active
+  // real server, so the banner config and role manager can be surfaced to
+  // admins (not just the owner). Clears on server change; on any failure it
+  // stays empty, so the UI falls back to owner-only gating.
+  useEffect(() => {
+    setMemberPermissions([])
+    if (!activeServer || !isRealServerId(activeServer) || !user?.id) return
+    let active = true
+    getMemberPermissions(activeServer, user.id)
+      .then((perms) => {
+        if (active) setMemberPermissions(perms)
+      })
+      .catch(() => {
+        if (active) setMemberPermissions([])
+      })
+    return () => {
+      active = false
+    }
+  }, [activeServer, user?.id])
 
   // HU-7: when a real server becomes active, check for a pending ownership
   // transfer relevant to the caller. The recipient of a pending transfer sees a
@@ -366,6 +580,21 @@ export default function ChatScreen() {
     }
   }, [activeServer])
 
+  // HU-25/26: what the caller may do here, to show the moderation controls.
+  useEffect(() => {
+    setMyPerms(null)
+    if (!activeServer || !isRealServerId(activeServer)) return
+    let active = true
+    getMyServerPermissions(activeServer)
+      .then((perms) => {
+        if (active) setMyPerms(perms)
+      })
+      .catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [activeServer])
+
   const channel = categories.flatMap((c) => c.channels).find((c) => c.id === activeChannel)
 
   // Owner of the active server (derived): only the owner may initiate a transfer.
@@ -375,11 +604,76 @@ export default function ChatScreen() {
     !!activeServer && servers.find((s) => s.id === activeServer)?.ownerId === user?.id
 
   const activeServerName = servers.find((s) => s.id === activeServer)?.name ?? ""
+  const activeServerBannerUrl = servers.find((s) => s.id === activeServer)?.bannerUrl ?? null
+  const activeServerIconUrl = servers.find((s) => s.id === activeServer)?.iconUrl ?? null
+
+  // Admin of the active server: the owner always qualifies; a non-owner member
+  // qualifies when the backend grants them the `administrator` permission. Gates
+  // the banner config (CA2 of #95) and the role manager (CA2 of #92). Falls back
+  // to owner-only when permissions couldn't be confirmed.
+  const canAdministrate =
+    !!activeServer &&
+    isRealServerId(activeServer) &&
+    (isOwner || memberPermissions.includes(ADMIN_PERMISSION))
+
+  // Can manage roles: the backend lets anyone with MANAGE_ROLES (or ADMINISTRATOR,
+  // or the owner) administer roles — a wider set than canAdministrate, which only
+  // accepts the owner or ADMINISTRATOR. Gates ALL the role UI (create/edit/delete/
+  // default/reorder, assign per member, view members). Per-channel overwrites
+  // (HU-7) deliberately stay under canAdministrate: they live inside the
+  // admin-gated "Editar canal" modal, so a manage_roles-only user cannot reach
+  // them from the UI (documented limitation). Same real-server/fallback rules.
+  const canManageRoles =
+    !!activeServer &&
+    isRealServerId(activeServer) &&
+    (isOwner ||
+      memberPermissions.includes(ADMIN_PERMISSION) ||
+      memberPermissions.includes(MANAGE_ROLES_PERMISSION))
 
   // Whether the owner may offer ownership to a given member row: only the owner,
   // only on real servers, and never the owner's own row.
   const canOfferTransferTo = (memberId: string) =>
     isOwner && isRealServerId(activeServer) && memberId !== user?.id
+
+  // HU-25/26: moderators see "Banear" on other members' rows and the bans list.
+  // Never on yourself or the owner. The role hierarchy (CA2) is only enforced by
+  // the backend, which answers 403 with a clear message.
+  const canBan = isRealServerId(activeServer) && hasServerPermission(myPerms, "ban_members")
+  const canBanMember = (memberId: string) =>
+    canBan &&
+    memberId !== user?.id &&
+    servers.find((s) => s.id === activeServer)?.ownerId !== memberId
+
+  // Options of a member row's "⋮" menu. Role changes will go here too.
+  const memberActions = (memberId: string, memberName: string): MemberAction[] => {
+    const actions: MemberAction[] = []
+    if (canManageRoles) {
+      actions.push({
+        key: "roles",
+        label: "Gestionar roles",
+        icon: "shield-outline",
+        onPress: () => openMemberRoles(memberId, memberName),
+      })
+    }
+    if (canOfferTransferTo(memberId)) {
+      actions.push({
+        key: "transfer",
+        label: "Transferir propiedad",
+        icon: "swap-horizontal-outline",
+        onPress: () => openTransferForMember(memberId, memberName),
+      })
+    }
+    if (canBanMember(memberId)) {
+      actions.push({
+        key: "ban",
+        label: "Banear",
+        icon: "ban-outline",
+        tone: "danger",
+        onPress: () => openBanModal(memberId, memberName),
+      })
+    }
+    return actions
+  }
 
   // The recipient sees an actionable banner (accept/reject); the sender sees an
   // informational one while the transfer stays pending.
@@ -450,6 +744,428 @@ export default function ChatScreen() {
     }
   }
 
+  const openDeleteServer = () => {
+    setDeleteSrvError("")
+    setDeleteSrvOpen(true)
+  }
+
+  const handleDeleteServer = async (confirmationName: string) => {
+    setDeleteSrvBusy(true)
+    setDeleteSrvError("")
+    try {
+      await deleteServer(activeServer, confirmationName)
+      const remaining = servers.filter((s) => s.id !== activeServer)
+      setServers(remaining)
+      setActiveServer(remaining[0]?.id ?? "")
+      setDeleteSrvOpen(false)
+    } catch (err) {
+      setDeleteSrvError(friendlyError(err))
+    } finally {
+      setDeleteSrvBusy(false)
+    }
+  }
+
+  // HU-4 (#95): open the server settings (banner) modal.
+  const openSettings = () => {
+    setSettingsError("")
+    setSettingsOpen(true)
+  }
+
+  const handleSaveSettings = async (fields: {
+    name?: string
+    icon?: Blob | { uri: string; name: string; type: string }
+    banner?: Blob | { uri: string; name: string; type: string }
+  }) => {
+    setSettingsBusy(true)
+    setSettingsError("")
+    try {
+      const updated = await updateServer(activeServer, fields)
+      // Reflect the new name/icon/banner for everyone in the server list (CA1).
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === updated.id
+            ? { ...s, name: updated.name, abbr: updated.abbr, iconUrl: updated.iconUrl, bannerUrl: updated.bannerUrl }
+            : s,
+        ),
+      )
+      setSettingsOpen(false)
+    } catch (err) {
+      // 422 = empty patch or invalid name/image; the backend persisted nothing (CA3).
+      // Its Spanish detail is specific (name vs image), so surface it via friendlyError.
+      if (err instanceof ApiError && err.status === 503) {
+        setSettingsError("El almacenamiento de imágenes no está disponible ahora. Probá de nuevo en un rato.")
+      } else {
+        setSettingsError(friendlyError(err))
+      }
+    } finally {
+      setSettingsBusy(false)
+    }
+  }
+
+  // HU-5 (#92): open the role manager and load the real role list plus the
+  // default role (so its deletion can be blocked, matching the backend's 409).
+  const openRoles = async () => {
+    setRolesOpen(true)
+    setRolesError("")
+    setRoleBusyId("")
+    if (!isRealServerId(activeServer)) {
+      setRolesList([])
+      setCurrentUserRoles([])
+      return
+    }
+    setRolesLoading(true)
+    try {
+      // HU-6: also load the current user's own roles so the reorder helper (CA2)
+      // can compute their hierarchy level without a separate round-trip.
+      const [list, defaultId, myRoles] = await Promise.all([
+        getServerRoles(activeServer),
+        getDefaultRoleId(activeServer),
+        user?.id ? getMemberRoles(activeServer, user.id) : Promise.resolve([] as ServerRole[]),
+      ])
+      setRolesList(list)
+      setDefaultRoleId(defaultId)
+      setCurrentUserRoles(myRoles)
+    } catch (err) {
+      setRolesError(friendlyError(err))
+      setRolesList([])
+    } finally {
+      setRolesLoading(false)
+    }
+  }
+
+  const handleDeleteRole = async (role: ServerRole) => {
+    setRoleBusyId(role.id)
+    setRolesError("")
+    try {
+      await deleteRole(activeServer, role.id)
+      // CA1: the role is gone -> drop it from the list so its members' perms
+      // visibly refresh. The backend already revoked it from every member.
+      setRolesList((prev) => prev.filter((r) => r.id !== role.id))
+    } catch (err) {
+      // CA2: 403 without admin permission. 409: default/own-admin role.
+      if (err instanceof ApiError && err.status === 409) {
+        setRolesError("Ese rol no se puede eliminar: es el rol por defecto o un rol de administración que tenés asignado.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+    } finally {
+      setRoleBusyId("")
+    }
+  }
+
+  // HU-4 (#95): set a role as the server's default role for new members.
+  // Mirrors the other role handlers' in-place state update: on success the local
+  // defaultRoleId is replaced (no reload), so the "Por defecto" mark and the
+  // delete-disable move to the new role and the previous role becomes deletable
+  // again (unless it's an admin role — RolesModal keeps that guard). On error
+  // defaultRoleId is never touched, so the mark stays on the previous role.
+  const handleSetDefaultRole = async (role: ServerRole) => {
+    setRoleDefaultBusyId(role.id)
+    setRolesError("")
+    try {
+      const newDefaultId = await setDefaultRole(activeServer, role.id)
+      setDefaultRoleId(newDefaultId)
+    } catch (err) {
+      // 403: missing MANAGE_ROLES/ADMINISTRATOR, or setting a role whose
+      // permissions the caller doesn't hold themselves.
+      if (err instanceof ApiError && err.status === 403) {
+        setRolesError("No tenés permisos para definir este rol como rol por defecto.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+    } finally {
+      setRoleDefaultBusyId("")
+    }
+  }
+
+  // HU-1: create a role. The backend assigns default permissions + position, so
+  // we only send the name. Returns true on success so the modal can clear its
+  // input. Mirrors handleDeleteRole's state update: on success the new role is
+  // appended to the END of the list, no screen reload.
+  const handleCreateRole = async (name: string): Promise<boolean> => {
+    const trimmed = name.trim()
+    setRolesError("")
+    // Frontend validation before calling the API: non-empty, at most 100 chars.
+    if (trimmed === "" || trimmed.length > 100) {
+      setRolesError("El nombre del rol no es válido.")
+      return false
+    }
+    setRoleCreateBusy(true)
+    try {
+      const created = await createRole(activeServer, trimmed)
+      setRolesList((prev) => [...prev, created])
+      return true
+    } catch (err) {
+      // CA2: 403 without permission. 409: duplicate name. 422: invalid name.
+      if (err instanceof ApiError && err.status === 403) {
+        setRolesError("No tenés permisos para crear roles en este servidor.")
+      } else if (err instanceof ApiError && err.status === 409) {
+        setRolesError("Ya existe un rol con ese nombre.")
+      } else if (err instanceof ApiError && err.status === 422) {
+        setRolesError("El nombre del rol no es válido.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+      return false
+    } finally {
+      setRoleCreateBusy(false)
+    }
+  }
+
+  // HU-2: edit a role's permissions. Sends the COMPLETE desired list (the backend
+  // replaces the whole mask). Returns true on success so the modal can collapse
+  // the editor; false (403/409/422) keeps it open and the modal reverts its
+  // toggles. Mirrors handleCreateRole/handleDeleteRole's in-place state update:
+  // on 200 the updated role replaces the old one by id, so the "N permisos"
+  // counter refreshes without a screen reload.
+  const handleUpdateRolePermissions = async (
+    role: ServerRole,
+    permissions: string[],
+  ): Promise<boolean> => {
+    setRoleUpdateBusy(true)
+    setRolesError("")
+    try {
+      const updated = await updateRolePermissions(activeServer, role.id, permissions)
+      setRolesList((prev) => prev.map((r) => (r.id === updated.id ? updated : r)))
+      return true
+    } catch (err) {
+      // CA3: 403 without permission or granting/removing a perm you lack.
+      // CA2: 409 removing administrator from your own role. 422: invalid perm.
+      if (err instanceof ApiError && err.status === 403) {
+        setRolesError("No tenés permisos para modificar este rol o alguno de sus permisos.")
+      } else if (err instanceof ApiError && err.status === 409) {
+        setRolesError("No podés quitarle el permiso de administración a tu propio rol.")
+      } else if (err instanceof ApiError && err.status === 422) {
+        setRolesError("Alguno de los permisos no es válido.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+      return false
+    } finally {
+      setRoleUpdateBusy(false)
+    }
+  }
+
+  // HU-6: the current user's own hierarchy position — the LOWEST position number
+  // (= highest in the hierarchy) among their roles, EXCLUDING the default role.
+  // null when they hold no non-default role. The owner is exempt (handled via
+  // `isOwner` in the modal), so this is only consulted for non-owners. Mirrors
+  // the backend's "own role" rule so the reorder UI can pre-disable illegal moves.
+  const ownRolePosition = currentUserRoles
+    .filter((r) => r.id !== defaultRoleId)
+    .reduce<number | null>((min, r) => (min === null || r.position < min ? r.position : min), null)
+
+  // HU-6: persist a new role order. Sends the COMPLETE id list in the displayed
+  // order (first = position 1 = top). Mirrors the other role handlers' in-place
+  // update: on 200 the modal's list is replaced with the backend's reordered
+  // response (no reload). Returns true on success so the modal exits reorder
+  // mode; false (403/422/other) so it reverts to the previous order.
+  const handleReorderRoles = async (roleIds: string[]): Promise<boolean> => {
+    setRoleReorderBusy(true)
+    setRolesError("")
+    try {
+      const reordered = await reorderRoles(activeServer, roleIds)
+      setRolesList(reordered)
+      return true
+    } catch (err) {
+      // 403: missing MANAGE_ROLES/ADMINISTRATOR, or a hierarchy violation (moving
+      // a role to/above the caller's own level). 422: the list no longer matches
+      // the server's roles (changed/incomplete/duplicated).
+      if (err instanceof ApiError && err.status === 403) {
+        setRolesError("No podés mover roles que estén a tu nivel o por encima del tuyo, o no tenés permisos para reordenar.")
+      } else if (err instanceof ApiError && err.status === 422) {
+        setRolesError("La lista de roles cambió. Volvé a abrir el modal e intentá de nuevo.")
+      } else {
+        setRolesError(friendlyError(err))
+      }
+      return false
+    } finally {
+      setRoleReorderBusy(false)
+    }
+  }
+
+  // HU-3: open the per-member role selector. Loads every server role plus the
+  // member's current roles (so the boxes pre-check), mirroring openRoles. Mock
+  // servers have no real roles, so the selector opens empty.
+  const openMemberRoles = async (memberId: string, memberName: string) => {
+    setMemberRolesOpen(true)
+    setMemberRolesTarget({ id: memberId, name: memberName })
+    setMemberRolesError("")
+    setMemberRoleBusyId("")
+    setMemberRolesList([])
+    setMemberAssignedIds([])
+    if (!isRealServerId(activeServer)) return
+    setMemberRolesLoading(true)
+    try {
+      const [all, assigned] = await Promise.all([
+        getServerRoles(activeServer),
+        getMemberRoles(activeServer, memberId),
+      ])
+      setMemberRolesList(all)
+      setMemberAssignedIds(assigned.map((r) => r.id))
+    } catch (err) {
+      setMemberRolesError(friendlyError(err))
+      setMemberRolesList([])
+    } finally {
+      setMemberRolesLoading(false)
+    }
+  }
+
+  // HU-2: open the dedicated permission editor for a role (drill-in from its
+  // row). The modal seeds its own draft from the role's permissions and saves
+  // through handleUpdateRolePermissions, which owns the busy/error state.
+  const openRolePermissions = (role: ServerRole) => {
+    setRolePermsTarget(role)
+    setRolesError("")
+    setRolePermsOpen(true)
+  }
+
+  // HU-8: open the read-only "ver miembros por rol" list. Loads the members that
+  // have the role, mirroring openRoles/openMemberRoles. Mock servers have no real
+  // roles, so the list opens empty.
+  const openRoleMembers = async (role: ServerRole) => {
+    setRoleMembersOpen(true)
+    setRoleMembersTarget({ id: role.id, name: role.name })
+    setRoleMembersError("")
+    setRoleMembersList([])
+    if (!isRealServerId(activeServer)) return
+    setRoleMembersLoading(true)
+    try {
+      const members = await getRoleMembers(activeServer, role.id)
+      setRoleMembersList(members)
+    } catch (err) {
+      setRoleMembersError(viewRoleMembersError(err))
+      setRoleMembersList([])
+    } finally {
+      setRoleMembersLoading(false)
+    }
+  }
+
+  // HU-3: assign (PUT) or remove (DELETE) a role for the open member. Returns
+  // true on success so the modal keeps its optimistic checkbox; false (403/other)
+  // so it reverts. Member permissions are the backend-computed union of their
+  // roles, so nothing is computed here. When the modified member is the current
+  // user, their flattened admin permissions are refreshed so admin-gated UI
+  // (e.g. the Roles shield icon) updates without a screen reload (CA2).
+  const handleToggleMemberRole = async (role: ServerRole, assign: boolean): Promise<boolean> => {
+    if (!memberRolesTarget) return false
+    setMemberRoleBusyId(role.id)
+    setMemberRolesError("")
+    try {
+      if (assign) {
+        await assignRoleToMember(activeServer, memberRolesTarget.id, role.id)
+      } else {
+        await removeRoleFromMember(activeServer, memberRolesTarget.id, role.id)
+      }
+      if (user?.id && memberRolesTarget.id === user.id) {
+        getMemberPermissions(activeServer, user.id)
+          .then(setMemberPermissions)
+          .catch(() => undefined)
+      }
+      return true
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        setMemberRolesError("No tenés permisos para asignar o quitar este rol.")
+      } else {
+        setMemberRolesError(friendlyError(err))
+      }
+      return false
+    } finally {
+      setMemberRoleBusyId("")
+    }
+  }
+
+  // HU-7: open the per-channel permission editor for the channel being edited.
+  // Loads every server role plus the channel's current overwrites (so each role's
+  // three-state selectors pre-fill), mirroring openRoles/openMemberRoles. Mock
+  // servers have no real channels, so the editor opens empty.
+  const openChannelPerms = async () => {
+    if (!editChTarget) return
+    setChannelPermsTarget({ id: editChTarget.id, name: editChTarget.name })
+    setChannelPermsOpen(true)
+    setChannelPermsError("")
+    setChannelPermsBusyId("")
+    setChannelPermsList([])
+    setChannelOverwrites([])
+    if (!isRealServerId(activeServer)) return
+    setChannelPermsLoading(true)
+    try {
+      const [rolesList, overwrites] = await Promise.all([
+        getServerRoles(activeServer),
+        getChannelOverwrites(activeServer, editChTarget.id),
+      ])
+      setChannelPermsList(rolesList)
+      setChannelOverwrites(overwrites)
+    } catch (err) {
+      setChannelPermsError(friendlyError(err))
+      setChannelPermsList([])
+    } finally {
+      setChannelPermsLoading(false)
+    }
+  }
+
+  // HU-7: create/replace a role's overwrite for the open channel with the COMPLETE
+  // allow/deny lists. The backend deletes the overwrite when both are empty, so
+  // the local list drops the role in that case and upserts it otherwise (no
+  // reload). Returns true on success so the modal collapses the editor; false
+  // (403/404/422/other) so it reverts the draft to the role's loaded state.
+  const handleSaveChannelOverwrite = async (
+    role: ServerRole,
+    allow: string[],
+    deny: string[],
+  ): Promise<boolean> => {
+    if (!channelPermsTarget) return false
+    setChannelPermsBusyId(role.id)
+    setChannelPermsError("")
+    try {
+      await setChannelOverwrite(activeServer, channelPermsTarget.id, role.id, allow, deny)
+      setChannelOverwrites((prev) => {
+        const rest = prev.filter((o) => o.roleId !== role.id)
+        // Both empty -> the backend deleted the overwrite; drop it locally too.
+        if (allow.length === 0 && deny.length === 0) return rest
+        return [...rest, { roleId: role.id, allow, deny }]
+      })
+      return true
+    } catch (err) {
+      setChannelPermsError(channelOverwriteError(err))
+      return false
+    } finally {
+      setChannelPermsBusyId("")
+    }
+  }
+
+  // HU-7: drop a role's overwrite for the open channel (back to all-inherit). On
+  // success the role leaves the local overwrites list (no reload). Returns true on
+  // success so the modal collapses the editor; false so it stays open.
+  const handleRemoveChannelOverwrite = async (role: ServerRole): Promise<boolean> => {
+    if (!channelPermsTarget) return false
+    setChannelPermsBusyId(role.id)
+    setChannelPermsError("")
+    try {
+      await deleteChannelOverwrite(activeServer, channelPermsTarget.id, role.id)
+      setChannelOverwrites((prev) => prev.filter((o) => o.roleId !== role.id))
+      return true
+    } catch (err) {
+      setChannelPermsError(channelOverwriteError(err))
+      return false
+    } finally {
+      setChannelPermsBusyId("")
+    }
+  }
+
+  // Forget a server we no longer belong to (left it, or lost access: HU-25).
+  // HU-18: without membership we can't stay in its voice channels either.
+  const dropServerLocally = async (serverId: string, notice?: string) => {
+    if (voice.channel?.serverId === serverId) await voice.leave()
+    const remaining = servers.filter((s) => s.id !== serverId)
+    setServers((prev) => prev.filter((s) => s.id !== serverId))
+    setActiveServer((current) => (current === serverId ? (remaining[0]?.id ?? "") : current))
+    if (notice) setAccessLostNotice(notice)
+  }
+  // The members poll effect outlives renders: read the latest version.
+  const dropServerLocallyRef = useRef(dropServerLocally)
+  dropServerLocallyRef.current = dropServerLocally
+
   const handleSend = async () => {
     if (!input.trim()) return
     const msg = await sendMessage(activeChannel, input.trim(), user?.name)
@@ -483,10 +1199,31 @@ export default function ChatScreen() {
     if (result.canceled) return
     const asset = result.assets[0]
     if (!asset) return
+
+    // CA3: reject unsupported formats and oversized files before sending,
+    // mirroring the backend (JPEG/PNG/WebP, max 5 MB) so the user gets instant,
+    // specific feedback instead of a failed upload round-trip.
     if (Platform.OS === "web") {
       const blob = await (await fetch(asset.uri)).blob()
+      if (!ICON_ALLOWED_TYPES.includes(blob.type)) {
+        setCreateError(ICON_FORMAT_ERROR)
+        return
+      }
+      if (blob.size > ICON_MAX_BYTES) {
+        setCreateError(ICON_SIZE_ERROR)
+        return
+      }
       setServerIcon(blob)
     } else {
+      const type = asset.mimeType ?? ""
+      if (type !== "" && !ICON_ALLOWED_TYPES.includes(type)) {
+        setCreateError(ICON_FORMAT_ERROR)
+        return
+      }
+      if (typeof asset.fileSize === "number" && asset.fileSize > ICON_MAX_BYTES) {
+        setCreateError(ICON_SIZE_ERROR)
+        return
+      }
       setServerIcon({
         uri: asset.uri,
         name: asset.fileName ?? "icon.jpg",
@@ -500,6 +1237,10 @@ export default function ChatScreen() {
     const name = serverName.trim()
     if (name === "") {
       setCreateError("Poné un nombre para el servidor.")
+      return
+    }
+    if (name.length > SERVER_NAME_MAX) {
+      setCreateError(NAME_TOO_LONG_ERROR)
       return
     }
     setCreateBusy(true)
@@ -547,6 +1288,9 @@ export default function ChatScreen() {
         setJoinError("No existe una invitación con ese código.")
       } else if (err instanceof ApiError && err.status === 403) {
         setJoinError("Estás baneado de este servidor.")
+      } else if (err instanceof ApiError && err.status === 410) {
+        // Expired, used up or revoked. Mirrors the deep-link route's wording.
+        setJoinError("Esta invitación expiró o alcanzó su límite de usos.")
       } else {
         setJoinError(friendlyError(err))
       }
@@ -651,6 +1395,71 @@ export default function ChatScreen() {
     }
   }
 
+  // ---- Voice join (HU-17) ----------------------------------------------------
+
+  // Voice channels don't open a message view: they ask to join, or jump to the
+  // Voz tab when the user is already in that call.
+  const handleChannelPress = (ch: { id: string; name: string; type: "text" | "voice" }) => {
+    if (ch.type === "text") {
+      setActiveChannel(ch.id)
+      if (isNarrow) setMobilePane("chat")
+      return
+    }
+    if (voice.channel?.id === ch.id && voice.status === "connected") {
+      router.push("/(main)/voice")
+      return
+    }
+    voice.clearDropNotice()
+    setVoiceJoinError(
+      !isRealServerId(activeServer)
+        ? MOCK_SERVER_NOTICE
+        : !voice.supported
+          ? "La voz por ahora solo está disponible en la versión web."
+          : "",
+    )
+    setVoiceJoinTarget({ id: ch.id, name: ch.name })
+  }
+
+  const handleJoinVoice = async () => {
+    if (!voiceJoinTarget || !isRealServerId(activeServer) || !voice.supported) return
+    setVoiceJoinBusy(true)
+    setVoiceJoinError("")
+    try {
+      await voice.join({
+        id: voiceJoinTarget.id,
+        name: voiceJoinTarget.name,
+        serverId: activeServer,
+        serverName: activeServerName,
+      })
+      setVoiceJoinTarget(null)
+    } catch (err) {
+      setVoiceJoinError(err instanceof Error ? err.message : friendlyError(err))
+    } finally {
+      setVoiceJoinBusy(false)
+    }
+  }
+
+  // HU-20: who sits in every voice channel of this server, live (CA2). Only
+  // real servers have a backend behind them; mock mode has no voice service.
+  const voiceChannelIds = isRealServerId(activeServer)
+    ? categories.flatMap((c) => c.channels).filter((c) => c.type === "voice" && UUID_RE.test(c.id)).map((c) => c.id)
+    : []
+  const presence = useVoicePresence(
+    voiceChannelIds,
+    !!user && !!process.env.EXPO_PUBLIC_API_URL,
+    (serverId) => {
+      const name = servers.find((s) => s.id === serverId)?.name
+      dropServerLocally(serverId, name ? `Fuiste baneado de ${name}.` : "Fuiste baneado de un servidor.")
+    },
+  )
+
+  // The call we are in keeps using LiveKit's own events (instant mute changes,
+  // "(vos)"); every other voice channel shows the presence from the service.
+  const voiceRosterFor = (channelId: string): VoiceParticipant[] => {
+    if (voice.status === "connected" && voice.channel?.id === channelId) return voice.participants
+    return (presence[channelId] ?? []).map((p) => ({ ...p, isLocal: p.id === user?.id }))
+  }
+
   // ---- Channel delete --------------------------------------------------------
 
   const openDeleteChannel = (ch: { id: string; name: string }) => {
@@ -665,6 +1474,8 @@ export default function ChatScreen() {
     setDeleteChError("")
     try {
       await deleteChannel(activeServer, deleteChTarget.id)
+      // HU-18: the room is gone for us too; don't keep a call to a dead channel.
+      if (voice.channel?.id === deleteChTarget.id) await voice.leave()
       setCategories((prev) =>
         prev.map((cat) => ({
           ...cat,
@@ -843,19 +1654,82 @@ export default function ChatScreen() {
       setLeaveError(MOCK_SERVER_NOTICE)
       return
     }
+    // CA (HU-5): the owner can't just leave — defense in depth in case the UI
+    // ever surfaces the action to an owner, so we never fire a doomed request.
+    if (isOwner) {
+      setLeaveError(OWNER_LEAVE_NOTICE)
+      return
+    }
     setLeaveBusy(true)
     try {
       await leaveServer(activeServer)
-      const remaining = servers.filter((s) => s.id !== activeServer)
-      setServers((prev) => prev.filter((s) => s.id !== activeServer))
-      if (remaining.length > 0) {
-        setActiveServer(remaining[0].id)
-      }
+      await dropServerLocally(activeServer)
       setLeaveOpen(false)
     } catch (err) {
-      setLeaveError(friendlyError(err))
+      // The backend rejects an owner leave with 409 -> show the same guidance.
+      if (err instanceof ApiError && err.status === 409) {
+        setLeaveError(OWNER_LEAVE_NOTICE)
+      } else {
+        setLeaveError(friendlyError(err))
+      }
     } finally {
       setLeaveBusy(false)
+    }
+  }
+
+  // ---- Moderation: ban (HU-25) / revoke (HU-26) ------------------------------
+
+  const openBanModal = (memberId: string, memberName: string) => {
+    setBanTarget({ id: memberId, name: memberName })
+    setBanReason("")
+    setBanError("")
+  }
+
+  const handleBan = async () => {
+    if (!banTarget) return
+    setBanBusy(true)
+    setBanError("")
+    try {
+      await banMember(activeServer, banTarget.id, banReason)
+      setBanTarget(null)
+      const members = await getServerMembers(activeServer)
+      setRoles(membersToRoleGroups(members))
+    } catch (err) {
+      setBanError(friendlyError(err))
+    } finally {
+      setBanBusy(false)
+    }
+  }
+
+  const refreshBans = async (serverId: string) => {
+    setBansLoading(true)
+    setBansError("")
+    try {
+      setBans(await listBans(serverId))
+    } catch (err) {
+      setBansError(friendlyError(err))
+      setBans([])
+    } finally {
+      setBansLoading(false)
+    }
+  }
+
+  const openBansModal = () => {
+    setBans([])
+    setBansOpen(true)
+    refreshBans(activeServer)
+  }
+
+  const handleUnban = async (userId: string) => {
+    setBansError("")
+    setUnbanningId(userId)
+    try {
+      await unbanMember(activeServer, userId)
+      setBans((prev) => prev.filter((b) => b.userId !== userId))
+    } catch (err) {
+      setBansError(friendlyError(err))
+    } finally {
+      setUnbanningId(null)
     }
   }
 
@@ -898,6 +1772,7 @@ export default function ChatScreen() {
       {/* Server rail */}
       <View
         style={{
+          display: isNarrow && mobilePane !== "channels" ? "none" : "flex",
           alignItems: "center",
           paddingTop: 8,
           paddingBottom: 8,
@@ -1036,26 +1911,14 @@ export default function ChatScreen() {
         </View>
       ) : null}
 
-      {isNarrow && channelSidebarOpen ? (
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={() => setChannelSidebarOpen(false)}
-          accessibilityLabel="Cerrar lista de canales"
-          style={{ position: "absolute", left: 52, right: 0, top: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.45)", zIndex: 30 }}
-        />
-      ) : null}
-
-      {/* Channel sidebar */}
-      {!isNarrow || channelSidebarOpen ? (
+      {/* Channel sidebar (the whole "channels" pane on phones) */}
       <View
         style={{
-          width: isNarrow ? Math.min(240, screenWidth - 52) : 180,
+          display: isNarrow && mobilePane !== "channels" ? "none" : "flex",
+          ...(isNarrow ? { flex: 1 } : { width: 216 }),
           backgroundColor: isNarrow ? "#151D23" : "rgba(255,255,255,0.055)",
           borderRightWidth: 1,
           borderRightColor: "rgba(255,255,255,0.13)",
-          ...(isNarrow
-            ? ({ position: "absolute", left: 52, top: 0, bottom: 0, zIndex: 31 } as object)
-            : {}),
         }}
       >
         {/* Server name header: name on its own row so long names stay readable,
@@ -1063,19 +1926,31 @@ export default function ChatScreen() {
         <View
           style={{ paddingHorizontal: 12, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.13)" }}
         >
+          {/* HU-4 (#95): the server banner, shown to every member once set. */}
+          {activeServerBannerUrl ? (
+            <Image
+              source={{ uri: activeServerBannerUrl }}
+              style={{ width: "100%", height: 72, borderRadius: 8 }}
+              resizeMode="cover"
+            />
+          ) : null}
           <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }} numberOfLines={2}>
             {servers.find((s) => s.id === activeServer)?.name ?? ""}
           </Text>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          {/* Primary actions — available to every member. Invitar grows to
+              anchor the row; Salir keeps its natural width beside it. */}
+          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+
             <PressableScale
               onPress={handleGenerateInvite}
               hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
               style={{
+                flex: 1,
                 flexDirection: "row",
                 alignItems: "center",
+                justifyContent: "center",
                 gap: 5,
-                paddingHorizontal: 10,
-                paddingVertical: 5,
+                paddingVertical: 6,
                 borderRadius: 8,
                 backgroundColor: "rgba(55,214,192,0.12)",
               }}
@@ -1090,9 +1965,10 @@ export default function ChatScreen() {
               style={{
                 flexDirection: "row",
                 alignItems: "center",
+                justifyContent: "center",
                 gap: 5,
-                paddingHorizontal: 10,
-                paddingVertical: 5,
+                paddingHorizontal: 12,
+                paddingVertical: 6,
                 borderRadius: 8,
                 backgroundColor: "rgba(255,255,255,0.05)",
               }}
@@ -1100,7 +1976,87 @@ export default function ChatScreen() {
               <Ionicons name="exit-outline" size={13} color="#8DA8AC" />
               <Text style={{ color: "#8DA8AC", fontSize: 11.5, fontWeight: "600" }}>Salir</Text>
             </PressableScale>
+            {canBan ? (
+              <PressableScale
+                onPress={openBansModal}
+                accessibilityLabel="Ver miembros baneados"
+                hoverStyle={{ backgroundColor: "rgba(255,127,114,0.30)" }}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 5,
+                  paddingHorizontal: 10,
+                  paddingVertical: 5,
+                  borderRadius: 8,
+                  backgroundColor: "rgba(255,127,114,0.18)",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,127,114,0.55)",
+                }}
+              >
+                <Ionicons name="ban-outline" size={13} color="#FF7F72" />
+                <Text style={{ color: "#FF7F72", fontSize: 11.5, fontWeight: "700" }}>Miembros baneados</Text>
+              </PressableScale>
+            ) : null}
           </View>
+          {/* Admin tools — banner config (#95), roles (#92), delete server
+              (#97). Rendered as a separate row of uniform square icon buttons
+              so they never overflow the sidebar, and only when the member can
+              see at least one of them, so the row is never empty. */}
+          {canManageRoles || (isOwner && isRealServerId(activeServer)) ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              {canAdministrate ? (
+                <PressableScale
+                  onPress={openSettings}
+                  accessibilityLabel="Configuración del servidor"
+                  hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
+                  style={{
+                    width: 34,
+                    height: 30,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(255,255,255,0.05)",
+                  }}
+                >
+                  <Ionicons name="settings-outline" size={15} color="#8DA8AC" />
+                </PressableScale>
+              ) : null}
+              {canManageRoles ? (
+                <PressableScale
+                  onPress={openRoles}
+                  accessibilityLabel="Roles del servidor"
+                  hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
+                  style={{
+                    width: 34,
+                    height: 30,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(255,255,255,0.05)",
+                  }}
+                >
+                  <Ionicons name="shield-outline" size={15} color="#8DA8AC" />
+                </PressableScale>
+              ) : null}
+              {isOwner && isRealServerId(activeServer) ? (
+                <PressableScale
+                  onPress={openDeleteServer}
+                  accessibilityLabel="Eliminar servidor"
+                  hoverStyle={{ backgroundColor: "rgba(255,127,114,0.22)" }}
+                  style={{
+                    width: 34,
+                    height: 30,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 8,
+                    backgroundColor: "rgba(255,127,114,0.12)",
+                  }}
+                >
+                  <Ionicons name="trash-outline" size={15} color="#FF7F72" />
+                </PressableScale>
+              ) : null}
+            </View>
+          ) : null}
         </View>
 
         <ScrollView style={{ flex: 1 }}>
@@ -1115,7 +2071,7 @@ export default function ChatScreen() {
                     onPress={openCreateChannel}
                     accessibilityLabel="Crear canal"
                     hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
-                    style={{ padding: 3, borderRadius: 6 }}
+                    style={{ padding: iconBtnPad, borderRadius: 6 }}
                   >
                     <Ionicons name="add" size={14} color="#8DA8AC" />
                   </PressableScale>
@@ -1123,10 +2079,13 @@ export default function ChatScreen() {
               </View>
               {cat.channels.map((ch) => {
                 const active = activeChannel === ch.id
+                const inCall = ch.type === "voice" && voice.channel?.id === ch.id && voice.status !== "idle"
+                const roster = voiceRosterFor(ch.id)
                 return (
+                  <View key={ch.id}>
                   <PressableScale
-                    key={ch.id}
-                    onPress={() => setActiveChannel(ch.id)}
+                    onPress={() => handleChannelPress(ch)}
+                    accessibilityLabel={ch.type === "voice" ? `Canal de voz ${ch.name}` : `Canal ${ch.name}`}
                     pressedScale={1}
                     hoverStyle={active ? undefined : { backgroundColor: "rgba(255,255,255,0.05)" }}
                     style={{
@@ -1134,21 +2093,28 @@ export default function ChatScreen() {
                       alignItems: "center",
                       gap: 6,
                       paddingHorizontal: 12,
-                      paddingVertical: 6,
+                      paddingVertical: isNarrow ? 11 : 6,
                       backgroundColor: active ? "rgba(55,214,192,0.15)" : "transparent",
                       borderLeftWidth: 2,
                       borderLeftColor: active ? "#37D6C0" : "transparent",
                     }}
                   >
-                    <Text style={{ color: "#8DA8AC", fontWeight: "700", fontSize: 11, opacity: 0.7 }}>
-                      {ch.type === "voice" ? "♪" : "#"}
-                    </Text>
+                    {ch.type === "voice" ? (
+                      <Ionicons
+                        name={inCall ? "volume-high" : "volume-medium-outline"}
+                        size={12}
+                        color={inCall ? "#4FD69C" : "#8DA8AC"}
+                        style={{ opacity: inCall ? 1 : 0.7 }}
+                      />
+                    ) : (
+                      <Text style={{ color: "#8DA8AC", fontWeight: "700", fontSize: 11, opacity: 0.7 }}>#</Text>
+                    )}
                     <Text
                       style={{
                         flex: 1,
                         fontSize: 12,
-                        color: active || ch.unread ? "#E6F3F3" : "#8DA8AC",
-                        fontWeight: active || ch.unread ? "600" : "400",
+                        color: inCall ? "#4FD69C" : active || ch.unread ? "#E6F3F3" : "#8DA8AC",
+                        fontWeight: inCall || active || ch.unread ? "600" : "400",
                       }}
                       numberOfLines={1}
                     >
@@ -1160,7 +2126,7 @@ export default function ChatScreen() {
                           onPress={() => handleMoveChannel(ch.id, "up")}
                           accessibilityLabel={`Mover canal ${ch.name} arriba`}
                           hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
-                          style={{ padding: 3, borderRadius: 6 }}
+                          style={{ padding: iconBtnPad, borderRadius: 6 }}
                         >
                           <Ionicons name="chevron-up" size={11} color="#8DA8AC" />
                         </PressableScale>
@@ -1168,7 +2134,7 @@ export default function ChatScreen() {
                           onPress={() => handleMoveChannel(ch.id, "down")}
                           accessibilityLabel={`Mover canal ${ch.name} abajo`}
                           hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
-                          style={{ padding: 3, borderRadius: 6 }}
+                          style={{ padding: iconBtnPad, borderRadius: 6 }}
                         >
                           <Ionicons name="chevron-down" size={11} color="#8DA8AC" />
                         </PressableScale>
@@ -1176,7 +2142,7 @@ export default function ChatScreen() {
                           onPress={() => openEditChannel(ch)}
                           accessibilityLabel={`Editar canal ${ch.name}`}
                           hoverStyle={{ backgroundColor: "rgba(255,255,255,0.12)" }}
-                          style={{ padding: 3, borderRadius: 6 }}
+                          style={{ padding: iconBtnPad, borderRadius: 6 }}
                         >
                           <Ionicons name="pencil-outline" size={11} color="#8DA8AC" />
                         </PressableScale>
@@ -1184,7 +2150,7 @@ export default function ChatScreen() {
                           onPress={() => openDeleteChannel(ch)}
                           accessibilityLabel={`Eliminar canal ${ch.name}`}
                           hoverStyle={{ backgroundColor: "rgba(255,127,114,0.14)" }}
-                          style={{ padding: 3, borderRadius: 6 }}
+                          style={{ padding: iconBtnPad, borderRadius: 6 }}
                         >
                           <Ionicons name="trash-outline" size={11} color="#FF9E94" />
                         </PressableScale>
@@ -1198,62 +2164,103 @@ export default function ChatScreen() {
                       </View>
                     ) : null}
                   </PressableScale>
+                  {roster.map((p) => (
+                    <View
+                      key={p.id}
+                      style={{ flexDirection: "row", alignItems: "center", gap: 7, paddingLeft: 30, paddingRight: 12, paddingVertical: isNarrow ? 5 : 3 }}
+                    >
+                      <Avatar initials={p.avatar} uri={p.avatarUrl} size={18} />
+                      <Text style={{ flex: 1, color: "#8DA8AC", fontSize: 11.5 }} numberOfLines={1}>
+                        {p.isLocal ? `${p.name} (vos)` : p.name}
+                      </Text>
+                      {!p.micEnabled ? <Ionicons name="mic-off" size={11} color="#FF9E94" /> : null}
+                    </View>
+                  ))}
+                  </View>
                 )
               })}
             </View>
           ))}
         </ScrollView>
 
-        {/* Voice state bar */}
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 8,
-            paddingHorizontal: 12,
-            paddingVertical: 8,
-            borderTopWidth: 1,
-            borderTopColor: "rgba(255,255,255,0.13)",
-            backgroundColor: "rgba(255,255,255,0.15)",
-          }}
-        >
-          <View style={{ width: 8, height: 8, borderRadius: 9999, backgroundColor: "#4FD69C" }} />
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: "#4FD69C", fontWeight: "700", fontSize: 11 }}>Conectado</Text>
-            <Text style={{ color: "#8DA8AC", fontSize: 10 }} numberOfLines={1}>
-              Sala 1 · 3 personas
-            </Text>
+        {voice.dropNotice ? (
+          <View style={{ ...NOTICE_ERROR, marginHorizontal: 10, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Text style={{ flex: 1, color: "#FF9E94", fontSize: 11.5, lineHeight: 16 }}>{voice.dropNotice}</Text>
+            <TouchableOpacity onPress={voice.clearDropNotice} accessibilityLabel="Cerrar aviso" hitSlop={8}>
+              <Ionicons name="close" size={14} color="#FF9E94" />
+            </TouchableOpacity>
           </View>
-        </View>
-      </View>
-      ) : null}
+        ) : null}
 
-      {/* Chat main */}
-      <View style={{ flex: 1 }}>
+        {/* Voice state bar: only while a call is open or opening (HU-17) */}
+        {voice.status !== "idle" && voice.channel ? (
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              borderTopWidth: 1,
+              borderTopColor: "rgba(255,255,255,0.13)",
+              backgroundColor: "rgba(255,255,255,0.10)",
+            }}
+          >
+            <PressableScale
+              onPress={() => router.push("/(main)/voice")}
+              accessibilityLabel="Abrir canal de voz"
+              pressedScale={0.98}
+              style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}
+            >
+              {voice.status === "connecting" ? (
+                <ActivityIndicator size="small" color="#F0C24B" />
+              ) : (
+                <Ionicons name="cellular" size={14} color="#4FD69C" />
+              )}
+              <View style={{ flex: 1 }}>
+                <Text
+                  style={{
+                    color: voice.status === "connecting" ? "#F0C24B" : "#4FD69C",
+                    fontWeight: "700",
+                    fontSize: 11,
+                  }}
+                >
+                  {voice.status === "connecting" ? "Conectando..." : "Conectado a voz"}
+                </Text>
+                <Text style={{ color: "#8DA8AC", fontSize: 10 }} numberOfLines={1}>
+                  {voice.channel.name} / {voice.channel.serverName}
+                </Text>
+              </View>
+            </PressableScale>
+            <PressableScale
+              onPress={() => voice.leave()}
+              accessibilityLabel="Desconectarse del canal de voz"
+              hoverStyle={{ backgroundColor: "rgba(255,127,114,0.18)" }}
+              style={{ padding: isNarrow ? 10 : 6, borderRadius: 8 }}
+            >
+              <Ionicons name="call" size={15} color="#FF9E94" style={{ transform: [{ rotate: "135deg" }] }} />
+            </PressableScale>
+          </View>
+        ) : null}
+      </View>
+
+      {/* Chat main (the "chat" pane on phones) */}
+      <View style={{ flex: 1, display: isNarrow && mobilePane !== "chat" ? "none" : "flex" }}>
         {/* Channel header */}
         <View
-          style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.13)" }}
+          style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: isNarrow ? 10 : 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.13)" }}
         >
           {isNarrow ? (
             <TouchableOpacity
-              onPress={() => {
-                setShowMembers(false)
-                setChannelSidebarOpen((o) => !o)
-              }}
-              accessibilityLabel="Mostrar canales"
-              style={{
-                width: 30,
-                height: 30,
-                borderRadius: 8,
-                alignItems: "center",
-                justifyContent: "center",
-                backgroundColor: "rgba(255,255,255,0.05)",
-              }}
+              onPress={() => setMobilePane("channels")}
+              accessibilityLabel="Volver a los canales"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{ padding: 4 }}
             >
-              <Ionicons name="menu" size={18} color="#8DA8AC" />
+              <Ionicons name="chevron-back" size={20} color="#E6F3F3" />
             </TouchableOpacity>
           ) : null}
-          <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 13.5 }}>
+          <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 13.5, flexShrink: 1 }} numberOfLines={1}>
             {channel ? `# ${channel.name}` : activeServer ? "Sin canales" : "Inicio"}
           </Text>
           <Text style={{ color: "#8DA8AC", flex: 1, marginLeft: 8, fontSize: 11 }} numberOfLines={1}>
@@ -1261,10 +2268,7 @@ export default function ChatScreen() {
           </Text>
           {activeServer ? (
           <TouchableOpacity
-            onPress={() => {
-              if (isNarrow) setChannelSidebarOpen(false)
-              setShowMembers((o) => !o)
-            }}
+            onPress={() => setShowMembers((o) => !o)}
             accessibilityLabel="Mostrar u ocultar miembros"
             style={{
               flexDirection: "row",
@@ -1514,27 +2518,38 @@ export default function ChatScreen() {
         </View>
       </View>
 
-      {isNarrow && showMembers ? (
+      {/* Members panel: a column on wide screens, a sheet over the content on
+          phones (tap outside to close). */}
+      {showMembers && isNarrow ? (
         <TouchableOpacity
           activeOpacity={1}
           onPress={() => setShowMembers(false)}
           accessibilityLabel="Cerrar miembros"
-          style={{ position: "absolute", left: 52, right: 0, top: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.45)", zIndex: 30 }}
+          style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, backgroundColor: "rgba(3,10,14,0.6)", zIndex: 30 }}
         />
       ) : null}
-
-      {/* Members panel */}
       {showMembers && (
         <View
-          style={{
-            width: isNarrow ? Math.min(260, screenWidth - 52) : 216,
-            backgroundColor: isNarrow ? "#131B21" : "rgba(255,255,255,0.03)",
-            borderLeftWidth: 1,
-            borderLeftColor: "rgba(255,255,255,0.10)",
-            ...(isNarrow
-              ? ({ position: "absolute", right: 0, top: 0, bottom: 0, zIndex: 31 } as object)
-              : {}),
-          }}
+          style={
+            isNarrow
+              ? {
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  right: 0,
+                  width: Math.min(300, windowWidth - 48),
+                  zIndex: 31,
+                  backgroundColor: "#0E1C26",
+                  borderLeftWidth: 1,
+                  borderLeftColor: "rgba(255,255,255,0.10)",
+                }
+              : {
+                  width: 216,
+                  backgroundColor: "rgba(255,255,255,0.03)",
+                  borderLeftWidth: 1,
+                  borderLeftColor: "rgba(255,255,255,0.10)",
+                }
+          }
         >
           {/* Panel header */}
           <View
@@ -1608,7 +2623,7 @@ export default function ChatScreen() {
                           alignItems: "center",
                           gap: 9,
                           paddingHorizontal: 6,
-                          paddingVertical: 5,
+                          paddingVertical: isNarrow ? 9 : 5,
                           borderRadius: 8,
                           backgroundColor: hovered ? "rgba(255,255,255,0.05)" : "transparent",
                           opacity: m.status === "offline" ? 0.55 : 1,
@@ -1626,29 +2641,15 @@ export default function ChatScreen() {
                             {STATUS_LABELS[m.status]}
                           </Text>
                         </View>
-                        {/* HU-7: owner-only per-member action to hand over ownership.
-                            A separate touchable that stops the press from bubbling to
-                            the row's tap-to-open-profile navigation. */}
-                        {canOfferTransferTo(m.id) ? (
-                          <TouchableOpacity
-                            onPress={(e) => {
-                              e.stopPropagation()
-                              openTransferForMember(m.id, m.name)
-                            }}
-                            accessibilityLabel={`Transferir propiedad a ${m.name}`}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            style={{
-                              width: 26,
-                              height: 26,
-                              borderRadius: 8,
-                              alignItems: "center",
-                              justifyContent: "center",
-                              backgroundColor: "rgba(55,214,192,0.10)",
-                            }}
-                          >
-                            <Ionicons name="swap-horizontal-outline" size={14} color="#37D6C0" />
-                          </TouchableOpacity>
-                        ) : null}
+                        {/* Per-member actions (HU-3 roles, HU-7 transfer, HU-25
+                            ban) behind a "⋮" menu; it stops the press from opening
+                            the profile. */}
+                        {(() => {
+                          const actions = memberActions(m.id, m.name)
+                          return actions.length > 0 ? (
+                            <MemberActionsMenu memberName={m.name} actions={actions} />
+                          ) : null
+                        })()}
                       </TouchableOpacity>
                     )
                   })}
@@ -1708,14 +2709,27 @@ export default function ChatScreen() {
               </View>
             ) : null}
             <Text style={LABEL}>Nombre del servidor</Text>
+            {/* CA2: no silent cap — let the user exceed the limit and show why,
+                with a live counter aligned to the backend's max of 100. */}
             <TextInput
               value={serverName}
               onChangeText={setServerName}
               placeholder="Ej: FIUBA · IS2"
               placeholderTextColor="#5E7E82"
-              maxLength={SERVER_NAME_MAX}
-              style={[FIELD, { marginBottom: 16 }]}
+              style={[FIELD, { marginBottom: 6 }]}
             />
+            <Text
+              style={{
+                color: serverName.trim().length > SERVER_NAME_MAX ? "#FF9E94" : "#5E7E82",
+                fontSize: 11,
+                textAlign: "right",
+                marginBottom: 16,
+              }}
+            >
+              {serverName.trim().length > SERVER_NAME_MAX
+                ? NAME_TOO_LONG_ERROR
+                : `${serverName.trim().length}/${SERVER_NAME_MAX}`}
+            </Text>
             <Text style={LABEL}>Ícono</Text>
             <TouchableOpacity
               onPress={handlePickIcon}
@@ -1752,8 +2766,14 @@ export default function ChatScreen() {
             </TouchableOpacity>
             <PressableScale
               onPress={handleCreateServer}
-              disabled={createBusy}
-              style={[PRIMARY_BTN, { marginTop: 18, opacity: createBusy ? 0.7 : 1 }]}
+              disabled={createBusy || serverName.trim().length > SERVER_NAME_MAX}
+              style={[
+                PRIMARY_BTN,
+                {
+                  marginTop: 18,
+                  opacity: createBusy || serverName.trim().length > SERVER_NAME_MAX ? 0.7 : 1,
+                },
+              ]}
             >
               {createBusy ? <ActivityIndicator color="#04211D" /> : <Text style={PRIMARY_TXT}>Crear servidor</Text>}
             </PressableScale>
@@ -1936,6 +2956,70 @@ export default function ChatScreen() {
         )}
       </ModalShell>
 
+      {/* Join-voice confirmation (HU-17) */}
+      <ModalShell
+        visible={voiceJoinTarget !== null}
+        onClose={() => {
+          if (!voiceJoinBusy) setVoiceJoinTarget(null)
+        }}
+        title="Unirte al canal de voz"
+      >
+        <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 18 }}>
+          Vas a entrar a{" "}
+          <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>{voiceJoinTarget?.name ?? "este canal"}</Text>
+          {activeServerName ? ` en ${activeServerName}` : ""}. Tu micrófono se va a activar y los demás te
+          van a escuchar.
+          {voice.channel && voice.status !== "idle" && voice.channel.id !== voiceJoinTarget?.id ? (
+            <Text>
+              {" "}Te vas a desconectar de{" "}
+              <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>{voice.channel.name}</Text>.
+            </Text>
+          ) : null}
+        </Text>
+
+        {voiceJoinError ? (
+          <View style={NOTICE_ERROR}>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{voiceJoinError}</Text>
+          </View>
+        ) : null}
+
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <PressableScale
+            onPress={() => setVoiceJoinTarget(null)}
+            disabled={voiceJoinBusy}
+            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
+            style={{
+              flex: 1,
+              borderRadius: 10,
+              paddingVertical: 12,
+              alignItems: "center",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.10)",
+              backgroundColor: "rgba(255,255,255,0.06)",
+            }}
+          >
+            <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
+          </PressableScale>
+          <PressableScale
+            onPress={handleJoinVoice}
+            disabled={voiceJoinBusy || !isRealServerId(activeServer) || !voice.supported}
+            hoverStyle={{ backgroundColor: "#2BC4AF" }}
+            style={{
+              ...PRIMARY_BTN,
+              flex: 1,
+              width: undefined,
+              flexDirection: "row",
+              justifyContent: "center",
+              gap: 8,
+              opacity: voiceJoinBusy || !isRealServerId(activeServer) || !voice.supported ? 0.6 : 1,
+            }}
+          >
+            {voiceJoinBusy ? <ActivityIndicator size="small" color="#04211D" /> : null}
+            <Text style={PRIMARY_TXT}>{voiceJoinBusy ? "Conectando" : "Unirme"}</Text>
+          </PressableScale>
+        </View>
+      </ModalShell>
+
       {/* Delete-channel confirmation */}
       <ModalShell
         visible={deleteChOpen}
@@ -2039,6 +3123,30 @@ export default function ChatScreen() {
             <Text style={PRIMARY_TXT}>Guardar</Text>
           )}
         </PressableScale>
+
+        {/* HU-7: per-channel role permission overrides. Admin-only (same
+            canAdministrate gate as the role manager); opens its own modal for the
+            channel being edited so this one never grows a big inline editor. */}
+        {canAdministrate && editChTarget ? (
+          <PressableScale
+            onPress={openChannelPerms}
+            accessibilityLabel="Configurar permisos por rol de este canal"
+            hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              paddingVertical: 11,
+              borderRadius: 10,
+              marginTop: 10,
+              backgroundColor: "rgba(55,214,192,0.12)",
+            }}
+          >
+            <Ionicons name="options-outline" size={16} color="#37D6C0" />
+            <Text style={{ color: "#37D6C0", fontSize: 13, fontWeight: "700" }}>Permisos por rol</Text>
+          </PressableScale>
+        ) : null}
       </ModalShell>
 
       {/* Create-channel modal */}
@@ -2133,57 +3241,180 @@ export default function ChatScreen() {
         onClose={() => setLeaveOpen(false)}
         title="Abandonar servidor"
       >
-        <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 18 }}>
-          ¿Seguro que querés abandonar{" "}
-          <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>
-            {servers.find((s) => s.id === activeServer)?.name ?? "este servidor"}
-          </Text>
-          ? Vas a perder el acceso a sus canales.
-        </Text>
+        {/* CA (HU-5): the owner is blocked from leaving — explain the only two
+            ways out (transfer or delete) instead of offering the destructive
+            action. Non-owners get the normal confirmation flow. */}
+        {isOwner ? (
+          <>
+            <View style={NOTICE_ERROR}>
+              <Text style={{ color: "#FF9E94", fontSize: 12.5, lineHeight: 18 }}>
+                {OWNER_LEAVE_NOTICE}
+              </Text>
+            </View>
+            <PressableScale
+              onPress={() => setLeaveOpen(false)}
+              hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
+              style={{
+                borderRadius: 10,
+                paddingVertical: 12,
+                alignItems: "center",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.10)",
+                backgroundColor: "rgba(255,255,255,0.06)",
+              }}
+            >
+              <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Entendido</Text>
+            </PressableScale>
+          </>
+        ) : (
+          <>
+            <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 18 }}>
+              ¿Seguro que querés abandonar{" "}
+              <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>
+                {servers.find((s) => s.id === activeServer)?.name ?? "este servidor"}
+              </Text>
+              ? Vas a perder el acceso a sus canales.
+            </Text>
 
-        {leaveError ? (
-          <View style={NOTICE_ERROR}>
-            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{leaveError}</Text>
-          </View>
-        ) : null}
+            {leaveError ? (
+              <View style={NOTICE_ERROR}>
+                <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{leaveError}</Text>
+              </View>
+            ) : null}
 
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <PressableScale
-            onPress={() => setLeaveOpen(false)}
-            disabled={leaveBusy}
-            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
-            style={{
-              flex: 1,
-              borderRadius: 10,
-              paddingVertical: 12,
-              alignItems: "center",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.10)",
-              backgroundColor: "rgba(255,255,255,0.06)",
-            }}
-          >
-            <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
-          </PressableScale>
-          <PressableScale
-            onPress={handleLeaveServer}
-            disabled={leaveBusy}
-            style={{
-              flex: 1,
-              borderRadius: 10,
-              paddingVertical: 12,
-              alignItems: "center",
-              backgroundColor: "#FF7F72",
-              opacity: leaveBusy ? 0.7 : 1,
-            }}
-          >
-            {leaveBusy ? (
-              <ActivityIndicator color="#04211D" />
-            ) : (
-              <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>Abandonar</Text>
-            )}
-          </PressableScale>
-        </View>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <PressableScale
+                onPress={() => setLeaveOpen(false)}
+                disabled={leaveBusy}
+                hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
+                style={{
+                  flex: 1,
+                  borderRadius: 10,
+                  paddingVertical: 12,
+                  alignItems: "center",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,255,255,0.10)",
+                  backgroundColor: "rgba(255,255,255,0.06)",
+                }}
+              >
+                <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
+              </PressableScale>
+              <PressableScale
+                onPress={handleLeaveServer}
+                disabled={leaveBusy}
+                style={{
+                  flex: 1,
+                  borderRadius: 10,
+                  paddingVertical: 12,
+                  alignItems: "center",
+                  backgroundColor: "#FF7F72",
+                  opacity: leaveBusy ? 0.7 : 1,
+                }}
+              >
+                {leaveBusy ? (
+                  <ActivityIndicator color="#04211D" />
+                ) : (
+                  <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>Abandonar</Text>
+                )}
+              </PressableScale>
+            </View>
+          </>
+        )}
       </ModalShell>
+
+      {/* Delete-server confirmation (HU-6 / #97) */}
+      <DeleteServerModal
+        visible={deleteSrvOpen}
+        serverName={activeServerName}
+        busy={deleteSrvBusy}
+        error={deleteSrvError}
+        onClose={() => setDeleteSrvOpen(false)}
+        onConfirm={handleDeleteServer}
+      />
+
+      {/* HU-4 (#95): server settings — banner */}
+      <ServerSettingsModal
+        visible={settingsOpen}
+        serverName={activeServerName}
+        currentIconUrl={activeServerIconUrl}
+        currentBannerUrl={activeServerBannerUrl}
+        busy={settingsBusy}
+        error={settingsError}
+        onClose={() => setSettingsOpen(false)}
+        onSave={handleSaveSettings}
+      />
+
+      {/* HU-5 (#92): role manager */}
+      <RolesModal
+        visible={rolesOpen}
+        roles={rolesList}
+        defaultRoleId={defaultRoleId}
+        loading={rolesLoading}
+        error={rolesError}
+        busyRoleId={roleBusyId}
+        defaultBusyId={roleDefaultBusyId}
+        canManageRoles={canManageRoles}
+        createBusy={roleCreateBusy}
+        reorderBusy={roleReorderBusy}
+        isOwner={isOwner}
+        ownRolePosition={ownRolePosition}
+        onClose={() => setRolesOpen(false)}
+        onDelete={handleDeleteRole}
+        onSetDefault={handleSetDefaultRole}
+        onCreate={handleCreateRole}
+        onEditPermissions={openRolePermissions}
+        onReorder={handleReorderRoles}
+        onViewMembers={openRoleMembers}
+      />
+
+      {/* HU-2: dedicated permission editor (drill-in from a role row) */}
+      <RolePermissionsModal
+        visible={rolePermsOpen}
+        roleName={rolePermsTarget?.name ?? ""}
+        role={rolePermsTarget}
+        busy={roleUpdateBusy}
+        error={rolesError}
+        onClose={() => setRolePermsOpen(false)}
+        onSave={handleUpdateRolePermissions}
+      />
+
+      {/* HU-8: read-only list of members with a given role */}
+      <RoleMembersModal
+        visible={roleMembersOpen}
+        roleName={roleMembersTarget?.name ?? ""}
+        members={roleMembersList}
+        loading={roleMembersLoading}
+        error={roleMembersError}
+        onClose={() => setRoleMembersOpen(false)}
+      />
+
+      {/* HU-3: per-member role assignment */}
+      <MemberRolesModal
+        visible={memberRolesOpen}
+        memberName={memberRolesTarget?.name ?? ""}
+        roles={memberRolesList}
+        assignedRoleIds={memberAssignedIds}
+        loading={memberRolesLoading}
+        error={memberRolesError}
+        busyRoleId={memberRoleBusyId}
+        onClose={() => setMemberRolesOpen(false)}
+        onToggle={handleToggleMemberRole}
+      />
+
+      {/* HU-7: per-channel role permission overrides */}
+      <ChannelPermissionsModal
+        visible={channelPermsOpen}
+        channelName={channelPermsTarget?.name ?? ""}
+        roles={channelPermsList}
+        overwrites={channelOverwrites}
+        loading={channelPermsLoading}
+        error={channelPermsError}
+        busyRoleId={channelPermsBusyId}
+        canAdministrate={canAdministrate}
+        onClose={() => setChannelPermsOpen(false)}
+        onSave={handleSaveChannelOverwrite}
+        onRemove={handleRemoveChannelOverwrite}
+      />
 
       {/* Transfer ownership (HU-7) */}
       <ModalShell
@@ -2235,6 +3466,157 @@ export default function ChatScreen() {
           ) : (
             <Text style={PRIMARY_TXT}>Transferir</Text>
           )}
+        </PressableScale>
+      </ModalShell>
+
+      {/* Ban confirmation (HU-25) */}
+      <ModalShell
+        visible={!!banTarget}
+        onClose={() => setBanTarget(null)}
+        title="Banear miembro"
+        subtitle="No va a poder volver a unirse con ninguna invitación hasta que se revoque el baneo."
+      >
+        <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 16 }}>
+          ¿Seguro que querés banear a{" "}
+          <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>{banTarget?.name ?? ""}</Text> de{" "}
+          <Text style={{ color: "#E6F3F3", fontWeight: "700" }}>{activeServerName || "este servidor"}</Text>?
+        </Text>
+
+        {banError ? (
+          <View style={NOTICE_ERROR}>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{banError}</Text>
+          </View>
+        ) : null}
+
+        <Text style={LABEL}>Motivo (opcional)</Text>
+        <TextInput
+          value={banReason}
+          onChangeText={setBanReason}
+          placeholder="Por ejemplo: spam"
+          placeholderTextColor="#5E7E82"
+          maxLength={500}
+          style={[FIELD, { marginBottom: 18 }]}
+        />
+
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <PressableScale
+            onPress={() => setBanTarget(null)}
+            disabled={banBusy}
+            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
+            style={{
+              flex: 1,
+              borderRadius: 10,
+              paddingVertical: 12,
+              alignItems: "center",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.10)",
+              backgroundColor: "rgba(255,255,255,0.06)",
+            }}
+          >
+            <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }}>Cancelar</Text>
+          </PressableScale>
+          <PressableScale
+            onPress={handleBan}
+            disabled={banBusy}
+            style={{
+              flex: 1,
+              borderRadius: 10,
+              paddingVertical: 12,
+              alignItems: "center",
+              backgroundColor: "#FF7F72",
+              opacity: banBusy ? 0.7 : 1,
+            }}
+          >
+            {banBusy ? (
+              <ActivityIndicator color="#04211D" />
+            ) : (
+              <Text style={{ fontWeight: "700", fontSize: 14, color: "#04211D" }}>Banear</Text>
+            )}
+          </PressableScale>
+        </View>
+      </ModalShell>
+
+      {/* Bans list with revoke (HU-26) */}
+      <ModalShell
+        visible={bansOpen}
+        onClose={() => setBansOpen(false)}
+        title="Miembros baneados"
+        subtitle={`Usuarios baneados de ${activeServerName || "este servidor"}. Al revocar, pueden volver a unirse con una invitación.`}
+      >
+        {bansError ? (
+          <View style={NOTICE_ERROR}>
+            <Text style={{ color: "#FF9E94", fontSize: 12.5 }}>{bansError}</Text>
+          </View>
+        ) : null}
+
+        {bansLoading ? (
+          <ActivityIndicator color="#37D6C0" style={{ marginVertical: 18 }} />
+        ) : bans.length === 0 && !bansError ? (
+          <Text style={{ color: "#8DA8AC", fontSize: 12.5, textAlign: "center", marginVertical: 18 }}>
+            No hay usuarios baneados.
+          </Text>
+        ) : (
+          <ScrollView style={{ maxHeight: 320 }} contentContainerStyle={{ gap: 8 }}>
+            {bans.map((ban) => (
+              <View
+                key={ban.userId}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: 10,
+                  borderRadius: 10,
+                  backgroundColor: "rgba(255,255,255,0.04)",
+                  borderWidth: 1,
+                  borderColor: "rgba(255,255,255,0.08)",
+                }}
+              >
+                <Avatar initials={ban.avatar} size={28} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 13 }} numberOfLines={1}>
+                    {ban.name}
+                  </Text>
+                  <Text style={{ color: "#8DA8AC", fontSize: 11 }} numberOfLines={2}>
+                    {ban.reason ? `${ban.reason} · ` : ""}por {ban.bannedByName} ·{" "}
+                    {new Date(ban.createdAt).toLocaleDateString()}
+                  </Text>
+                </View>
+                <PressableScale
+                  onPress={() => handleUnban(ban.userId)}
+                  disabled={unbanningId === ban.userId}
+                  accessibilityLabel={`Revocar baneo de ${ban.name}`}
+                  hoverStyle={{ backgroundColor: "rgba(55,214,192,0.22)" }}
+                  style={{
+                    paddingHorizontal: 10,
+                    paddingVertical: 6,
+                    borderRadius: 8,
+                    backgroundColor: "rgba(55,214,192,0.12)",
+                    opacity: unbanningId === ban.userId ? 0.6 : 1,
+                  }}
+                >
+                  {unbanningId === ban.userId ? (
+                    <ActivityIndicator size="small" color="#37D6C0" />
+                  ) : (
+                    <Text style={{ color: "#37D6C0", fontSize: 11.5, fontWeight: "700" }}>Revocar</Text>
+                  )}
+                </PressableScale>
+              </View>
+            ))}
+          </ScrollView>
+        )}
+      </ModalShell>
+
+      {/* Lost access to a server (HU-25: banned) */}
+      <ModalShell
+        visible={!!accessLostNotice}
+        onClose={() => setAccessLostNotice("")}
+        title="Perdiste el acceso"
+      >
+        <Text style={{ color: "#8DA8AC", fontSize: 13, lineHeight: 19, marginBottom: 18 }}>
+          {accessLostNotice}
+        </Text>
+        <PressableScale onPress={() => setAccessLostNotice("")} style={PRIMARY_BTN}>
+          <Text style={PRIMARY_TXT}>Entendido</Text>
         </PressableScale>
       </ModalShell>
     </View>

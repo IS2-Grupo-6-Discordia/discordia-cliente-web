@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Discordia",
-    "slug": "discordia-mobile",
+    "slug": "discordia-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "discordia",
@@ -37,21 +37,19 @@
       "expo-router",
       "expo-font",
       "expo-asset",
+      "@livekit/react-native-expo-plugin",
+      "@config-plugins/react-native-webrtc",
       [
-        "expo-build-properties",
+        "@react-native-google-signin/google-signin",
         {
-          "android": {
-            "usesCleartextTraffic": true
-          }
+          "iosUrlScheme": "com.googleusercontent.apps.357428623304-lnu4vkc3psjuocv2m984ic4tqglbpfes"
         }
       ]
     ],
     "extra": {
-      "router": {},
       "eas": {
-        "projectId": "f459e802-fd86-4063-b49c-201875eea4f4"
+        "projectId": "115019a3-8459-4818-96f9-2524b91e9b92"
       }
-    },
-    "owner": "rbrunodevs-team"
+    }
   }
 }

@@ -153,10 +153,12 @@ export async function api<T>(
 
 // Multipart upload helper. Unlike `api()`, this does NOT set Content-Type so
 // that fetch can add the multipart boundary itself; it only attaches the
-// Authorization header when a token is present.
+// Authorization header when a token is present. `method` defaults to POST
+// (create) but can be PATCH for partial multipart updates (e.g. banner edit).
 export async function apiUpload<T>(
   path: string,
   formData: FormData,
+  method: string = "POST",
 ): Promise<T> {
   const headers: Record<string, string> = {}
 
@@ -165,7 +167,7 @@ export async function apiUpload<T>(
   }
 
   const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
+    method,
     body: formData,
     headers,
   })
@@ -183,7 +185,7 @@ export async function apiUpload<T>(
     } catch {
       detail = text || "Error desconocido"
     }
-    if (__DEV__) console.warn(`[apiUpload] POST ${path} -> ${res.status}`, text.slice(0, 200))
+    if (__DEV__) console.warn(`[apiUpload] ${method} ${path} -> ${res.status}`, text.slice(0, 200))
     throw new ApiError(res.status, detail, extractDetailMessage(detail, "Error desconocido"))
   }
 

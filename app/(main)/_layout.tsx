@@ -1,4 +1,5 @@
 import { Tabs, useRouter, Redirect } from "expo-router"
+import { useSafeAreaInsets } from "react-native-safe-area-context"
 import { View, Text, TouchableOpacity, Platform } from "react-native"
 import type { ColorValue } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
@@ -21,6 +22,7 @@ export default function MainLayout() {
   const { isLoggedIn, isLoading } = useAuth()
   const wake = useWakeState()
   const router = useRouter()
+  const insets = useSafeAreaInsets()
 
   // Al recargar una ruta protegida (p. ej. /(main)/chat) este layout corre antes
   // que index.tsx, así que también hay que esperar la rehidratación acá: si no,
@@ -83,9 +85,9 @@ export default function MainLayout() {
             borderTopColor: "rgba(255,255,255,0.13)",
             borderTopWidth: 1,
             // Room for icon + label: at 62 the labels got clipped on phones.
-            height: 68,
+            height: 68 + insets.bottom,
             paddingTop: 6,
-            paddingBottom: 10,
+            paddingBottom: 10 + insets.bottom,
           },
           tabBarActiveTintColor: "#37D6C0",
           tabBarInactiveTintColor: "#8DA8AC",

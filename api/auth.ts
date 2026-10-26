@@ -78,6 +78,7 @@ interface LoginApiResponse {
 interface RegisterApiResponse {
   user: BackendUser
   access_token: string
+  refresh_token?: string
   token_type: string
 }
 
@@ -137,6 +138,7 @@ export async function register(
       body: JSON.stringify({ name, email, password }),
     })
     await setToken(res.access_token)
+    await setRefreshToken(res.refresh_token ?? null)
     return { token: res.access_token, user: toUser(res.user) }
   } catch (err) {
     if (err instanceof ApiError && err.status === 409) {

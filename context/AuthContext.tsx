@@ -18,6 +18,7 @@ interface AuthState {
   setUser: (user: User) => void
   logout: () => void
   signedOutReason: SignedOutReason | null
+  showSignedOutReason: (reason: SignedOutReason) => void
   clearSignedOutReason: () => void
 }
 
@@ -76,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [logout],
   )
 
+  const showSignedOutReason = useCallback((reason: SignedOutReason) => setSignedOutReason(reason), [])
   const clearSignedOutReason = useCallback(() => setSignedOutReason(null), [])
 
   const isLoggedIn = !!user
@@ -161,7 +163,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, isLoggedIn, isLoading, setUser, logout, signedOutReason, clearSignedOutReason }}
+      value={{ user, isLoggedIn, isLoading, setUser, logout, signedOutReason, showSignedOutReason, clearSignedOutReason }}
     >
       {children}
     </AuthContext.Provider>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { View, Text, ScrollView, ActivityIndicator } from "react-native"
 import type { ViewStyle } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
+import { ADMIN_PERMISSION } from "@/api"
 import type { ServerRole } from "@/api/types"
 import ModalShell from "./ModalShell"
 import PressableScale from "./PressableScale"
@@ -63,6 +64,12 @@ export default function RolePermissionsModal({
     }
   }, [visible, role])
 
+  // Administrator is a wildcard: the backend reads it as "every permission", so
+  // when it's checked we SHOW the other toggles as on and locked. This is purely
+  // visual — the draft is never mutated, so Save still sends only what the user
+  // really picked plus "administrator" (never the eight individual permissions).
+  const adminOn = draft.includes(ADMIN_PERMISSION)
+
   const togglePerm = (key: string) => {
     setDraft((prev) => (prev.includes(key) ? prev.filter((p) => p !== key) : [...prev, key]))
   }
@@ -95,23 +102,38 @@ export default function RolePermissionsModal({
 
       <ScrollView style={{ maxHeight: 320 }}>
         {PERMISSION_OPTIONS.map((perm) => {
-          const checked = draft.includes(perm.key)
+          // Every permission other than Administrator itself is implied while
+          // Administrator is on: shown checked and locked, but left out of the draft.
+          const impliedByAdmin = adminOn && perm.key !== ADMIN_PERMISSION
+          const checked = impliedByAdmin || draft.includes(perm.key)
+          const locked = busy || impliedByAdmin
           return (
             <PressableScale
               key={perm.key}
               onPress={() => togglePerm(perm.key)}
-              disabled={busy}
+              disabled={locked}
               pressedScale={1}
-              accessibilityLabel={`${checked ? "Quitar" : "Agregar"} permiso ${perm.label}`}
-              hoverStyle={{ backgroundColor: "rgba(255,255,255,0.04)" }}
-              style={PERM_ROW}
+              accessibilityLabel={
+                impliedByAdmin
+                  ? `${perm.label}: incluido por Administrador`
+                  : `${checked ? "Quitar" : "Agregar"} permiso ${perm.label}`
+              }
+              hoverStyle={locked ? undefined : { backgroundColor: "rgba(255,255,255,0.04)" }}
+              style={{ ...PERM_ROW, opacity: impliedByAdmin ? 0.6 : 1 }}
             >
               <Ionicons
                 name={checked ? "checkbox" : "square-outline"}
                 size={18}
                 color={checked ? "#37D6C0" : "#5E7E82"}
               />
-              <Text style={{ color: "#E6F3F3", fontSize: 13.5 }}>{perm.label}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: "#E6F3F3", fontSize: 13.5 }}>{perm.label}</Text>
+                {impliedByAdmin ? (
+                  <Text style={{ color: "#5E7E82", fontSize: 11, marginTop: 2 }}>
+                    Incluido por Administrador
+                  </Text>
+                ) : null}
+              </View>
             </PressableScale>
           )
         })}

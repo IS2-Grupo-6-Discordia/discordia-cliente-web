@@ -11,9 +11,8 @@ import PressableScale from "./PressableScale"
 // fixed so the editor always reads the same.
 const OVERWRITABLE_PERMISSIONS: { key: string; label: string }[] = [
   { key: "send_messages", label: "Enviar mensajes" },
+  { key: "add_reactions", label: "Agregar reacciones" },
   { key: "connect_voice", label: "Conectarse a voz" },
-  { key: "create_invite", label: "Crear invitaciones" },
-  { key: "manage_channels", label: "Gestionar canal" },
 ]
 
 // The three states a permission can hold in a channel overwrite: forced allow,

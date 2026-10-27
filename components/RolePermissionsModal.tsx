@@ -21,6 +21,7 @@ export const PERMISSION_OPTIONS: { key: string; label: string }[] = [
   { key: "ban_members", label: "Banear miembros" },
   { key: "send_messages", label: "Enviar mensajes" },
   { key: "connect_voice", label: "Conectarse a voz" },
+  { key: "add_reactions", label: "Agregar reacciones" },
 ]
 
 interface RolePermissionsModalProps {

@@ -2166,7 +2166,11 @@ export default function ChatScreen() {
                     >
                       {ch.name}
                     </Text>
-                    {isOwner && isRealServerId(activeServer) && active ? (
+                    {/* Channel management cluster. Text channels show it when selected
+                        (active); voice channels can never be "active" (tapping them joins the
+                        call), so they show it whenever present — otherwise they'd have no way to
+                        be edited, reordered, deleted or have their permissions managed. */}
+                    {isOwner && isRealServerId(activeServer) && (active || ch.type === "voice") ? (
                       <View style={{ flexDirection: "row", gap: 2 }}>
                         <PressableScale
                           onPress={() => handleMoveChannel(ch.id, "up")}

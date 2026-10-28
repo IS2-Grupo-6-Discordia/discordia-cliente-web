@@ -189,3 +189,14 @@ export interface VoicePresenceParticipant {
   microphone_muted: boolean
   joined_at: string
 }
+
+export interface UnreadCounts {
+  unread: number
+  mentions: number
+  serverId?: string
+}
+
+export interface UnreadSummary {
+  channels: Record<string, UnreadCounts>
+  servers: Record<string, UnreadCounts>
+}

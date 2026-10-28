@@ -38,7 +38,13 @@
       "expo-font",
       "expo-asset",
       "@livekit/react-native-expo-plugin",
-      "@config-plugins/react-native-webrtc",
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Discordia necesita acceso a tu cámara para compartir video en las llamadas.",
+          "microphonePermission": "Discordia necesita acceso a tu micrófono para participar de las llamadas."
+        }
+      ],
       [
         "@react-native-google-signin/google-signin",
         {

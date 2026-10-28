@@ -7,6 +7,7 @@ export interface VoiceRoomParticipant {
   isLocal: boolean
   micEnabled: boolean
   camEnabled: boolean
+  speaking: boolean
   videoTrack: VoiceVideoTrack | null
 }
 

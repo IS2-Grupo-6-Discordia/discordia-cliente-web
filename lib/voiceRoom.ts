@@ -25,6 +25,7 @@ function snapshot(room: Room): VoiceRoomParticipant[] {
       isLocal: true,
       micEnabled: local.isMicrophoneEnabled,
       camEnabled: local.isCameraEnabled,
+      speaking: local.isSpeaking,
       videoTrack: localPublication
         ? ({ participant: local, publication: localPublication, source: Track.Source.Camera } as unknown as VoiceVideoTrack)
         : null,
@@ -37,6 +38,7 @@ function snapshot(room: Room): VoiceRoomParticipant[] {
       isLocal: false,
       micEnabled: p.isMicrophoneEnabled,
       camEnabled: p.isCameraEnabled,
+      speaking: p.isSpeaking,
       videoTrack: publication
         ? ({ participant: p, publication, source: Track.Source.Camera } as unknown as VoiceVideoTrack)
         : null,
@@ -104,6 +106,7 @@ export async function connectVoiceRoom(
   room
     .on(RoomEvent.TrackSubscribed, emit)
     .on(RoomEvent.TrackUnsubscribed, emit)
+    .on(RoomEvent.ActiveSpeakersChanged, emit)
     .on(RoomEvent.ParticipantConnected, emit)
     .on(RoomEvent.ParticipantDisconnected, emit)
     .on(RoomEvent.TrackPublished, emit)

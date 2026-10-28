@@ -27,6 +27,7 @@ export interface VoiceParticipant {
   isLocal: boolean
   micEnabled: boolean
   camEnabled?: boolean
+  speaking?: boolean
   videoTrack?: VoiceVideoTrack | null
 }
 
@@ -238,6 +239,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
       isLocal: p.isLocal,
       micEnabled: p.micEnabled,
       camEnabled: p.camEnabled,
+      speaking: p.speaking,
       videoTrack: p.videoTrack,
     }
   })

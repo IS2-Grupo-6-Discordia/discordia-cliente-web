@@ -60,6 +60,11 @@ import {
   banMember,
   listBans,
   unbanMember,
+  getUnreadSummary,
+  markChannelRead,
+  withoutChannel,
+  extractMentionIds,
+  EMPTY_UNREAD,
 } from "@/api"
 import type {
   Server,
@@ -74,6 +79,7 @@ import type {
   ChannelOverwrite,
   ServerBan,
   MyServerPermissions,
+  UnreadSummary,
 } from "@/api/types"
 import { hasServerPermission } from "@/api/types"
 import { ApiError, friendlyError } from "@/api/client"
@@ -259,6 +265,11 @@ const NOTICE_OK: ViewStyle = {
 
 const PRESENCE_REFRESH_MS = 15_000
 
+// Cada cuánto se consulta el resumen de no leídos (indicadores por canal y servidor) y los mensajes
+// nuevos del canal que se está mirando. Hasta que haya tiempo real para mensajes, se consulta.
+const UNREAD_REFRESH_MS = 8_000
+const MESSAGES_REFRESH_MS = 5_000
+
 // Below this width (phones) the three columns don't fit: the screen shows one
 // pane at a time (channels or chat) and the member list slides over the content.
 const NARROW_BREAKPOINT = 768
@@ -320,6 +331,7 @@ export default function ChatScreen() {
   const [categories, setCategories] = useState<Category[]>([])
   const [roles, setRoles] = useState<RoleGroup[]>([])
   const [messages, setMessages] = useState<Message[]>([])
+  const [unread, setUnread] = useState<UnreadSummary>(EMPTY_UNREAD)
 
   // Add-server modal (HU-1 create / HU-3 join)
   const [addModalOpen, setAddModalOpen] = useState(false)
@@ -560,6 +572,90 @@ export default function ChatScreen() {
       .then(setMessages)
       .catch(() => setMessages([]))
   }, [activeChannel])
+
+  // --- Indicadores de no leído (CA1 canal, CA2 servidor, CA3 menciones) ---
+  // Solo los servidores reales (id UUID) tienen mensajes en el backend.
+  const realServerIds = servers
+    .map((s) => s.id)
+    .filter(isRealServerId)
+    .join(",")
+  // El canal que el usuario está mirando no cuenta como no leído, ni siquiera si llega una
+  // respuesta vieja del resumen. En celular "mirando" es estar en el panel del chat, no en la
+  // lista de canales.
+  const viewedChannel =
+    activeChannel && isRealServerId(activeChannel) && (!isNarrow || mobilePane === "chat")
+      ? activeChannel
+      : ""
+  const viewedRef = useRef("")
+  viewedRef.current = viewedChannel
+  // Mensajes que envié y que una respuesta anterior del historial todavía puede no traer.
+  const sentIds = useRef(new Set<string>())
+
+  useEffect(() => {
+    if (!realServerIds) {
+      setUnread(EMPTY_UNREAD)
+      return
+    }
+    let active = true
+    const load = () =>
+      getUnreadSummary(realServerIds.split(","))
+        .then((summary) => {
+          if (!active) return
+          const channel = viewedRef.current
+          setUnread(channel ? withoutChannel(summary, channel) : summary)
+        })
+        .catch(() => undefined)
+    load()
+    const timer = setInterval(load, UNREAD_REFRESH_MS)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [realServerIds])
+
+  // Al abrir un canal (y cada vez que llega o se envía un mensaje mientras se mira), queda leído.
+  useEffect(() => {
+    if (!viewedChannel) return
+    setUnread((prev) => withoutChannel(prev, viewedChannel))
+    markChannelRead(viewedChannel).catch(() => undefined)
+  }, [viewedChannel, messages.length])
+
+  // Mensajes nuevos de otros en el canal que se está mirando.
+  useEffect(() => {
+    if (!viewedChannel) return
+    let active = true
+    const timer = setInterval(() => {
+      getMessages(viewedChannel)
+        .then((list) => {
+          if (!active) return
+          const known = new Set(list.map((m) => m.id))
+          for (const id of known) sentIds.current.delete(id)
+          setMessages((prev) => {
+            const pending = prev.filter((m) => sentIds.current.has(m.id) && !known.has(m.id))
+            const next = [...list, ...pending]
+            const same =
+              next.length === prev.length && next.every((m, i) => m.id === prev[i]?.id)
+            return same ? prev : next
+          })
+        })
+        .catch(() => undefined)
+    }, MESSAGES_REFRESH_MS)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [viewedChannel])
+
+  // Lo que se pinta para un canal o servidor: el resumen del backend, y para el servidor de
+  // ejemplo los valores de demostración que ya traía.
+  const channelUnread = (ch: { id: string; unread?: boolean; mention?: number }) => {
+    const u = unread.channels[ch.id]
+    return { unread: !!u || !!ch.unread, mentions: u ? u.mentions : (ch.mention ?? 0) }
+  }
+  const serverUnread = (s: Server) => {
+    const u = unread.servers[s.id]
+    return { unread: !!u || !!s.unread || !!s.mention, mentions: u ? u.mentions : (s.mention ?? 0) }
+  }
 
   // HU-4/HU-5 gating: load the current user's admin permissions for the active
   // real server, so the banner config and role manager can be surfaced to
@@ -1200,10 +1296,24 @@ export default function ChatScreen() {
   dropServerLocallyRef.current = dropServerLocally
 
   const handleSend = async () => {
-    if (!input.trim()) return
-    const msg = await sendMessage(activeChannel, input.trim(), user?.name)
-    setMessages((prev) => [...prev, msg])
-    setInput("")
+    const text = input.trim()
+    if (!text) return
+    try {
+      const msg = await sendMessage(activeChannel, text, user?.name, {
+        serverId: activeServer,
+        // "@nombre" se convierte en el id del miembro: así el backend sabe a quién se mencionó.
+        mentions: extractMentionIds(
+          text,
+          roles.flatMap((r) => r.members),
+          user?.id,
+        ),
+      })
+      sentIds.current.add(msg.id)
+      setMessages((prev) => [...prev, msg])
+      setInput("")
+    } catch (err) {
+      setBannerError(friendlyError(err))
+    }
   }
 
   const openAddModal = (mode: "create" | "join") => {
@@ -1822,7 +1932,10 @@ export default function ChatScreen() {
           borderRightColor: "rgba(255,255,255,0.13)",
         }}
       >
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ alignItems: "center", gap: 8 }}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ alignItems: "center", gap: 8, paddingTop: 6, paddingHorizontal: 6 }}
+        >
           {servers.map((s) => (
             <View
               key={s.id}
@@ -1837,7 +1950,13 @@ export default function ChatScreen() {
               )}
               <PressableScale
                 onPress={() => setActiveServer(s.id)}
-                accessibilityLabel={s.name}
+                accessibilityLabel={
+                  serverUnread(s).mentions > 0
+                    ? `${s.name}, ${serverUnread(s).mentions} menciones sin leer`
+                    : serverUnread(s).unread
+                      ? `${s.name}, mensajes sin leer`
+                      : s.name
+                }
                 pressedScale={0.88}
                 hoverStyle={{ borderColor: "rgba(55,214,192,0.55)" }}
                 style={{
@@ -1871,7 +1990,25 @@ export default function ChatScreen() {
                     {s.abbr}
                   </Text>
                 )}
-                {s.mention ? (
+                {activeServer !== s.id && serverUnread(s).unread && serverUnread(s).mentions === 0 ? (
+                  // CA2: algún canal del servidor tiene mensajes sin leer. Punto blanco en la
+                  // esquina superior derecha del ícono (a la izquierda lo recortaba la barra).
+                  <View
+                    accessibilityLabel="Mensajes sin leer"
+                    style={{
+                      position: "absolute",
+                      right: -4,
+                      top: -4,
+                      width: 12,
+                      height: 12,
+                      borderRadius: 6,
+                      backgroundColor: "#FFFFFF",
+                      borderWidth: 2,
+                      borderColor: "#37D6C0",
+                    }}
+                  />
+                ) : null}
+                {serverUnread(s).mentions > 0 ? (
                   <View
                     style={{
                       position: "absolute",
@@ -1889,7 +2026,7 @@ export default function ChatScreen() {
                     }}
                   >
                     <Text style={{ color: "#FFFFFF", fontSize: 9, fontWeight: "800" }}>
-                      {s.mention}
+                      {serverUnread(s).mentions >= 99 ? "99+" : serverUnread(s).mentions}
                     </Text>
                   </View>
                 ) : null}
@@ -2125,13 +2262,24 @@ export default function ChatScreen() {
               </View>
               {cat.channels.map((ch) => {
                 const active = activeChannel === ch.id
+                const cu = ch.type === "text" ? channelUnread(ch) : { unread: false, mentions: 0 }
                 const inCall = ch.type === "voice" && voice.channel?.id === ch.id && voice.status !== "idle"
                 const roster = voiceRosterFor(ch.id)
                 return (
                   <View key={ch.id}>
                   <PressableScale
                     onPress={() => handleChannelPress(ch)}
-                    accessibilityLabel={ch.type === "voice" ? `Canal de voz ${ch.name}` : `Canal ${ch.name}`}
+                    accessibilityLabel={
+                      ch.type === "voice"
+                        ? `Canal de voz ${ch.name}`
+                        : `Canal ${ch.name}${
+                            cu.mentions > 0
+                              ? `, ${cu.mentions} menciones sin leer`
+                              : cu.unread
+                                ? ", mensajes sin leer"
+                                : ""
+                          }`
+                    }
                     pressedScale={1}
                     hoverStyle={active ? undefined : { backgroundColor: "rgba(255,255,255,0.05)" }}
                     style={{
@@ -2159,8 +2307,8 @@ export default function ChatScreen() {
                       style={{
                         flex: 1,
                         fontSize: 12,
-                        color: inCall ? "#4FD69C" : active || ch.unread ? "#E6F3F3" : "#8DA8AC",
-                        fontWeight: inCall || active || ch.unread ? "600" : "400",
+                        color: inCall ? "#4FD69C" : active || cu.unread ? "#E6F3F3" : "#8DA8AC",
+                        fontWeight: inCall || active || cu.unread ? "700" : "400",
                       }}
                       numberOfLines={1}
                     >
@@ -2202,12 +2350,20 @@ export default function ChatScreen() {
                         </PressableScale>
                       </View>
                     ) : null}
-                    {ch.mention ? (
+                    {cu.mentions > 0 ? (
+                      // CA3: una mención sin leer se ve distinta de la actividad común (globito coral con
+                      // la cantidad, en vez del punto blanco).
                       <View style={{ backgroundColor: "#FF7F72", borderRadius: 9999, paddingHorizontal: 6, paddingVertical: 1 }}>
                         <Text style={{ color: "#FFFFFF", fontSize: 9, fontWeight: "800" }}>
-                          {ch.mention}
+                          {cu.mentions >= 99 ? "99+" : cu.mentions}
                         </Text>
                       </View>
+                    ) : cu.unread && !active ? (
+                      // CA1: actividad sin leer en el canal.
+                      <View
+                        accessibilityLabel="Mensajes sin leer"
+                        style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: "#E6F3F3" }}
+                      />
                     ) : null}
                   </PressableScale>
                   {roster.map((p) => (

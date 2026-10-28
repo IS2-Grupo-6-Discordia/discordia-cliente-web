@@ -1,6 +1,8 @@
 export * from "./auth"
 export * from "./servers"
 export * from "./messages"
+export * from "./unread"
+export * from "./mentions"
 export * from "./voice"
 export * from "./types"
 export { getToken, loadToken, ApiError, friendlyError } from "./client"

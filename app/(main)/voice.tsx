@@ -1,9 +1,10 @@
 import { useState } from "react"
-import { View, Text, ScrollView, Platform, ActivityIndicator, useWindowDimensions } from "react-native"
+import { View, Text, Pressable, ActivityIndicator, useWindowDimensions } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 import { useRouter } from "expo-router"
-import Avatar from "@/components/Avatar"
 import PressableScale from "@/components/PressableScale"
+import VoiceStage, { VOICE_LAYOUTS } from "@/components/VoiceStage"
+import type { VoiceLayout } from "@/components/VoiceStage"
 import { useVoice } from "@/context/VoiceContext"
 
 // HU-19: a plain mic while transmitting; muted, the same mic crossed by a red
@@ -36,6 +37,9 @@ export default function VoiceScreen() {
   const voice = useVoice()
   const { channel, status, participants } = voice
   const [micError, setMicError] = useState("")
+  const [layout, setLayout] = useState<VoiceLayout>("auto")
+  const [pinnedId, setPinnedId] = useState<string | null>(null)
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false)
   // Phones: two smaller cards per row instead of one wide card each.
   const isNarrow = useWindowDimensions().width < 600
 
@@ -132,79 +136,22 @@ export default function VoiceScreen() {
         </View>
       </View>
 
-      {/* Participant grid */}
-      <ScrollView
-        contentContainerStyle={{
-          flexGrow: 1,
-          justifyContent: "center",
-          alignItems: "center",
-          padding: isNarrow ? 12 : 20,
-        }}
-      >
-        {connecting ? (
+      {connecting ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <Text style={{ color: "#8DA8AC", fontSize: 12.5 }}>Entrando a la sala...</Text>
-        ) : (
-          <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: isNarrow ? 10 : 16, maxWidth: 700, width: "100%" }}>
-            {participants.map((p) => (
-              <View
-                key={p.id}
-                style={{
-                  alignItems: "center",
-                  paddingVertical: isNarrow ? 18 : 28,
-                  paddingHorizontal: isNarrow ? 10 : 24,
-                  width: "47%",
-                  minWidth: isNarrow ? 130 : 200,
-                  backgroundColor: "rgba(255,255,255,0.04)",
-                  borderWidth: 1,
-                  borderColor: p.isLocal ? "rgba(55,214,192,0.35)" : "rgba(255,255,255,0.10)",
-                  borderRadius: 14,
-                  ...(Platform.OS === "web"
-                    ? ({ transitionProperty: "border-color, background-color", transitionDuration: "180ms" } as object)
-                    : {}),
-                }}
-              >
-                {/* Avatar + mic-off badge */}
-                <View style={{ position: "relative" }}>
-                  <View style={{ borderRadius: 9999, padding: 3 }}>
-                    <Avatar initials={p.avatar} uri={p.avatarUrl} size={isNarrow ? 52 : 68} />
-                  </View>
-                  {!p.micEnabled ? (
-                    <View
-                      style={{
-                        position: "absolute",
-                        right: -2,
-                        bottom: 0,
-                        width: 26,
-                        height: 26,
-                        borderRadius: 9999,
-                        alignItems: "center",
-                        justifyContent: "center",
-                        backgroundColor: "#FF7F72",
-                        borderWidth: 3,
-                        borderColor: "#0A1620",
-                      }}
-                    >
-                      <Ionicons name="mic-off" size={12} color="#04211D" />
-                    </View>
-                  ) : null}
-                </View>
+        </View>
+      ) : (
+        <VoiceStage
+          participants={participants}
+          layout={layout}
+          pinnedId={pinnedId}
+          onTogglePin={(id) => setPinnedId((current) => (current === id ? null : id))}
+        />
+      )}
 
-                <Text style={{ color: "#E6F3F3", fontWeight: "700", marginTop: 14, fontSize: 14 }} numberOfLines={1}>
-                  {p.name}
-                  {p.isLocal ? <Text style={{ color: "#8DA8AC", fontWeight: "500" }}> (vos)</Text> : null}
-                </Text>
-                <Text style={{ fontSize: 11, marginTop: 3, color: "#8DA8AC" }}>
-                  {p.micEnabled ? "En la sala" : "Silenciado"}
-                </Text>
-              </View>
-            ))}
-          </View>
-        )}
-      </ScrollView>
-
-      {micError ? (
+      {micError || voice.cameraError ? (
         <Text style={{ color: "#FF9E94", fontSize: 12, textAlign: "center", paddingHorizontal: 20, paddingBottom: 8 }}>
-          {micError}
+          {micError || voice.cameraError}
         </Text>
       ) : null}
 
@@ -221,7 +168,7 @@ export default function VoiceScreen() {
         }}
       >
         {/* HU-19: mute toggle */}
-        <View style={{ alignItems: "center", gap: 7, width: 88, opacity: connecting ? 0.5 : 1 }}>
+        <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 76 : 88, opacity: connecting ? 0.5 : 1 }}>
           <PressableScale
             onPress={handleToggleMic}
             disabled={connecting}
@@ -246,7 +193,55 @@ export default function VoiceScreen() {
           </Text>
         </View>
 
-        <View style={{ alignItems: "center", gap: 7, width: 88 }}>
+        <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 76 : 88, opacity: connecting ? 0.5 : 1 }}>
+          <PressableScale
+            onPress={() => voice.toggleCamera()}
+            disabled={connecting}
+            accessibilityLabel={voice.camEnabled ? "Apagar cámara" : "Activar cámara"}
+            pressedScale={0.9}
+            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.16)" }}
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 9999,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: voice.camEnabled ? "rgba(55,214,192,0.20)" : "rgba(255,255,255,0.10)",
+              borderWidth: 1,
+              borderColor: voice.camEnabled ? "rgba(55,214,192,0.50)" : "rgba(255,255,255,0.14)",
+            }}
+          >
+            <Ionicons name={voice.camEnabled ? "videocam" : "videocam-off"} size={22} color="#E6F3F3" />
+          </PressableScale>
+          <Text style={{ color: "#C9DADC", fontWeight: "700", fontSize: 10 }}>
+            {voice.camEnabled ? "Apagar" : "Activar cámara"}
+          </Text>
+        </View>
+
+        <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 76 : 88, opacity: connecting ? 0.5 : 1 }}>
+          <PressableScale
+            onPress={() => setLayoutMenuOpen((open) => !open)}
+            disabled={connecting}
+            accessibilityLabel="Cambiar diseño"
+            pressedScale={0.9}
+            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.16)" }}
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 9999,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: layoutMenuOpen ? "rgba(55,214,192,0.20)" : "rgba(255,255,255,0.10)",
+              borderWidth: 1,
+              borderColor: layoutMenuOpen ? "rgba(55,214,192,0.50)" : "rgba(255,255,255,0.14)",
+            }}
+          >
+            <Ionicons name="grid-outline" size={21} color="#E6F3F3" />
+          </PressableScale>
+          <Text style={{ color: "#C9DADC", fontWeight: "700", fontSize: 10 }}>Diseño</Text>
+        </View>
+
+        <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 76 : 88 }}>
           <PressableScale
             onPress={() => voice.leave()}
             accessibilityLabel="Desconectarse del canal de voz"
@@ -266,6 +261,61 @@ export default function VoiceScreen() {
           <Text style={{ color: "#FF7F72", fontWeight: "700", fontSize: 10 }}>Desconectar</Text>
         </View>
       </View>
+
+      {layoutMenuOpen ? (
+        <>
+          <Pressable
+            onPress={() => setLayoutMenuOpen(false)}
+            accessibilityLabel="Cerrar menú de diseño"
+            style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
+          />
+          <View
+            style={{
+              position: "absolute",
+              bottom: 108,
+              alignSelf: "center",
+              width: 240,
+              padding: 6,
+              borderRadius: 14,
+              backgroundColor: "#12222E",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.12)",
+            }}
+          >
+            <Text style={{ color: "#8DA8AC", fontSize: 11, fontWeight: "700", paddingHorizontal: 10, paddingVertical: 8 }}>
+              Cambiar diseño
+            </Text>
+            {VOICE_LAYOUTS.map((option) => {
+              const selected = option.value === layout
+              return (
+                <Pressable
+                  key={option.value}
+                  onPress={() => {
+                    setLayout(option.value)
+                    setLayoutMenuOpen(false)
+                  }}
+                  accessibilityLabel={`Diseño ${option.label}`}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 10,
+                    paddingHorizontal: 10,
+                    paddingVertical: 10,
+                    borderRadius: 10,
+                    backgroundColor: selected ? "rgba(55,214,192,0.14)" : "transparent",
+                  }}
+                >
+                  <Ionicons name={option.icon} size={17} color={selected ? "#37D6C0" : "#C9DADC"} />
+                  <Text style={{ flex: 1, color: selected ? "#37D6C0" : "#E6F3F3", fontSize: 13, fontWeight: "600" }}>
+                    {option.label}
+                  </Text>
+                  {selected ? <Ionicons name="checkmark" size={16} color="#37D6C0" /> : null}
+                </Pressable>
+              )
+            })}
+          </View>
+        </>
+      ) : null}
     </View>
   )
 }

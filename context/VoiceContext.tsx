@@ -5,8 +5,8 @@ import { joinVoiceChannel } from "@/api/voice"
 import { getUsersBatch, initials } from "@/api/auth"
 import { friendlyError } from "@/api/client"
 import { useAuth } from "@/context/AuthContext"
-import { connectVoiceRoom, MicrophoneError, VoiceAbortedError, voiceSupported } from "@/lib/voiceRoom"
-import type { VoiceRoomHandle, VoiceRoomParticipant, VoiceDropReason } from "@/lib/voiceRoom"
+import { CameraError, connectVoiceRoom, MicrophoneError, VoiceAbortedError, voiceSupported } from "@/lib/voiceRoom"
+import type { VoiceRoomHandle, VoiceRoomParticipant, VoiceDropReason, VoiceVideoTrack } from "@/lib/voiceRoom"
 
 // HU-17: one voice connection per session, shared by the channel list (chat)
 // and the Voz tab. It lives in the (main) layout so switching tabs never drops
@@ -26,6 +26,9 @@ export interface VoiceParticipant {
   avatarUrl?: string | null
   isLocal: boolean
   micEnabled: boolean
+  camEnabled?: boolean
+  speaking?: boolean
+  videoTrack?: VoiceVideoTrack | null
 }
 
 export type VoiceStatus = "idle" | "connecting" | "connected"
@@ -48,6 +51,9 @@ interface VoiceState {
   micEnabled: boolean
   // Rejects with a user-facing Spanish message if the mic can't be re-enabled.
   toggleMic: () => Promise<void>
+  camEnabled: boolean
+  cameraError: string
+  toggleCamera: () => Promise<void>
 }
 
 const DROP_MESSAGES: Record<VoiceDropReason, string> = {
@@ -73,6 +79,15 @@ function micErrorMessage(err: unknown): string {
   return "No pudimos cambiar el estado de tu micrófono. Probá de nuevo."
 }
 
+function cameraErrorMessage(err: unknown): string {
+  if (err instanceof CameraError) {
+    return err.kind === "denied"
+      ? "No tenemos acceso a tu cámara. Habilitala en la configuración y probá de nuevo."
+      : "No encontramos ninguna cámara. Conectá una y probá de nuevo."
+  }
+  return "No pudimos cambiar el estado de tu cámara. Puede que el canal no tenga video habilitado."
+}
+
 const VoiceContext = createContext<VoiceState | null>(null)
 
 export function VoiceProvider({ children }: { children: ReactNode }) {
@@ -82,6 +97,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
   const [roomParticipants, setRoomParticipants] = useState<VoiceRoomParticipant[]>([])
   const [profiles, setProfiles] = useState<Record<string, { name: string; avatarUrl?: string | null }>>({})
   const [dropNotice, setDropNotice] = useState("")
+  const [cameraError, setCameraError] = useState("")
 
   const handleRef = useRef<VoiceRoomHandle | null>(null)
   // Bumped on every join/leave so a slow, superseded attempt can't overwrite
@@ -96,6 +112,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     setStatus("idle")
     setChannel(null)
     setRoomParticipants([])
+    setCameraError("")
   }, [])
 
   const join = useCallback(
@@ -221,6 +238,9 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
       avatarUrl: profile?.avatarUrl,
       isLocal: p.isLocal,
       micEnabled: p.micEnabled,
+      camEnabled: p.camEnabled,
+      speaking: p.speaking,
+      videoTrack: p.videoTrack,
     }
   })
 
@@ -243,6 +263,23 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     }
   }, [micEnabled])
 
+  const camEnabled = roomParticipants.find((p) => p.isLocal)?.camEnabled ?? false
+  const cameraBusyRef = useRef(false)
+
+  const toggleCamera = useCallback(async () => {
+    const handle = handleRef.current
+    if (!handle || cameraBusyRef.current) return
+    cameraBusyRef.current = true
+    setCameraError("")
+    try {
+      await handle.setCameraEnabled(!camEnabled)
+    } catch (err) {
+      setCameraError(cameraErrorMessage(err))
+    } finally {
+      cameraBusyRef.current = false
+    }
+  }, [camEnabled])
+
   return (
     <VoiceContext.Provider
       value={{
@@ -256,6 +293,9 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         leave,
         micEnabled,
         toggleMic,
+        camEnabled,
+        cameraError,
+        toggleCamera,
       }}
     >
       {children}

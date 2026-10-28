@@ -4,9 +4,9 @@
 // native module that @livekit/react-native-webrtc provides.
 import { PermissionsAndroid, Platform } from "react-native"
 import { AudioSession, registerGlobals } from "@livekit/react-native"
-import { DisconnectReason, Room, RoomEvent } from "livekit-client"
-import { MicrophoneError, VoiceAbortedError } from "./voiceRoom.types"
-import type { VoiceRoomEvents, VoiceRoomHandle, VoiceRoomParticipant } from "./voiceRoom.types"
+import { DisconnectReason, Room, RoomEvent, Track, VideoPresets } from "livekit-client"
+import { CameraError, MicrophoneError, VoiceAbortedError } from "./voiceRoom.types"
+import type { VoiceRoomEvents, VoiceRoomHandle, VoiceRoomParticipant, VoiceVideoTrack } from "./voiceRoom.types"
 
 export * from "./voiceRoom.types"
 
@@ -18,11 +18,29 @@ export const voiceSupported: boolean = true
 
 function snapshot(room: Room): VoiceRoomParticipant[] {
   const local = room.localParticipant
+  const localPublication = local.getTrackPublication(Track.Source.Camera)
   const list: VoiceRoomParticipant[] = [
-    { identity: local.identity, isLocal: true, micEnabled: local.isMicrophoneEnabled },
+    {
+      identity: local.identity,
+      isLocal: true,
+      micEnabled: local.isMicrophoneEnabled,
+      camEnabled: local.isCameraEnabled,
+      videoTrack: localPublication
+        ? ({ participant: local, publication: localPublication, source: Track.Source.Camera } as unknown as VoiceVideoTrack)
+        : null,
+    },
   ]
   room.remoteParticipants.forEach((p) => {
-    list.push({ identity: p.identity, isLocal: false, micEnabled: p.isMicrophoneEnabled })
+    const publication = p.getTrackPublication(Track.Source.Camera)
+    list.push({
+      identity: p.identity,
+      isLocal: false,
+      micEnabled: p.isMicrophoneEnabled,
+      camEnabled: p.isCameraEnabled,
+      videoTrack: publication
+        ? ({ participant: p, publication, source: Track.Source.Camera } as unknown as VoiceVideoTrack)
+        : null,
+    })
   })
   return list
 }
@@ -35,11 +53,22 @@ async function ensureMicPermission(): Promise<void> {
   if (result !== PermissionsAndroid.RESULTS.GRANTED) throw new MicrophoneError("denied")
 }
 
+async function ensureCameraPermission(): Promise<void> {
+  if (Platform.OS !== "android") return
+  const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA)
+  if (result !== PermissionsAndroid.RESULTS.GRANTED) throw new CameraError("denied")
+}
+
 function toMicrophoneError(err: unknown): MicrophoneError | null {
   const name = err instanceof Error ? err.name : ""
   if (name === "NotAllowedError" || name === "SecurityError") return new MicrophoneError("denied")
   if (name === "NotFoundError" || name === "OverconstrainedError") return new MicrophoneError("missing")
   return null
+}
+
+function toCameraError(err: unknown): CameraError | null {
+  const microphoneError = toMicrophoneError(err)
+  return microphoneError ? new CameraError(microphoneError.kind) : null
 }
 
 export async function connectVoiceRoom(
@@ -54,6 +83,9 @@ export async function connectVoiceRoom(
 
   const room = new Room({
     audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    adaptiveStream: true,
+    dynacast: true,
+    videoCaptureDefaults: { resolution: VideoPresets.h720.resolution },
   })
 
   // Remote audio plays on its own natively (no <audio> elements); the audio
@@ -67,8 +99,11 @@ export async function connectVoiceRoom(
 
   let closedByUs = false
   const emit = () => events.onParticipants(snapshot(room))
+  const releaseCamera = () => room.localParticipant.getTrackPublication(Track.Source.Camera)?.track?.stop()
 
   room
+    .on(RoomEvent.TrackSubscribed, emit)
+    .on(RoomEvent.TrackUnsubscribed, emit)
     .on(RoomEvent.ParticipantConnected, emit)
     .on(RoomEvent.ParticipantDisconnected, emit)
     .on(RoomEvent.TrackPublished, emit)
@@ -78,6 +113,7 @@ export async function connectVoiceRoom(
     .on(RoomEvent.LocalTrackPublished, emit)
     .on(RoomEvent.LocalTrackUnpublished, emit)
     .on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
+      releaseCamera()
       releaseAudio()
       if (closedByUs || reason === DisconnectReason.CLIENT_INITIATED) return
       const removed =
@@ -89,7 +125,8 @@ export async function connectVoiceRoom(
 
   const disconnect = async () => {
     closedByUs = true
-    // Also stops the local mic track, so we stop transmitting (CA1).
+    await room.localParticipant.setCameraEnabled(false).catch(() => undefined)
+    releaseCamera()
     await room.disconnect()
     releaseAudio()
   }
@@ -139,6 +176,18 @@ export async function connectVoiceRoom(
     }
   }
 
+  const setCameraEnabled = async (enabled: boolean) => {
+    try {
+      if (enabled) await ensureCameraPermission()
+      await room.localParticipant.setCameraEnabled(enabled)
+    } catch (err) {
+      if (err instanceof CameraError) throw err
+      throw toCameraError(err) ?? err
+    } finally {
+      emit()
+    }
+  }
+
   emit()
-  return { disconnect, setMicEnabled }
+  return { disconnect, setMicEnabled, setCameraEnabled }
 }

@@ -6,6 +6,14 @@ export interface VoiceRoomParticipant {
   identity: string
   isLocal: boolean
   micEnabled: boolean
+  camEnabled: boolean
+  videoTrack: VoiceVideoTrack | null
+}
+
+// Platform-owned LiveKit track reference. UI components cast it only in their
+// platform-specific implementation.
+export interface VoiceVideoTrack {
+  readonly __voiceVideoTrack?: never
 }
 
 // Why the room dropped without the user asking for it.
@@ -36,6 +44,16 @@ export interface VoiceRoomHandle {
   // HU-19: mutes/unmutes the published mic track; the others see it through
   // LiveKit's mute events. Rejects with MicrophoneError if unmuting fails.
   setMicEnabled: (enabled: boolean) => Promise<void>
+  setCameraEnabled: (enabled: boolean) => Promise<void>
+}
+
+export class CameraError extends Error {
+  kind: "denied" | "missing"
+
+  constructor(kind: "denied" | "missing") {
+    super(kind === "denied" ? "camera-denied" : "camera-missing")
+    this.kind = kind
+  }
 }
 
 // Thrown when the browser denies or lacks a microphone: without it CA1

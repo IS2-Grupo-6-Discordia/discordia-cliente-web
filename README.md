@@ -20,6 +20,8 @@ respondan mostrando "Estamos despertando el servidor".
 Expo Go no trae el módulo nativo de WebRTC que usa LiveKit, así que la app se compila con
 [EAS Build](https://docs.expo.dev/build/introduction/) (en la nube; no hace falta Android SDK). La
 voz nativa vive en `lib/voiceRoom.ts` (`@livekit/react-native`); en web se usa `lib/voiceRoom.web.ts`.
+La cámara se pide recién al activarla. Como sus permisos nativos están definidos en `app.json`, cualquier
+cambio de esos textos o permisos requiere generar una APK nueva; una actualización JavaScript no alcanza.
 
 ```bash
 npx eas-cli login                                     # una vez, con una cuenta de Expo

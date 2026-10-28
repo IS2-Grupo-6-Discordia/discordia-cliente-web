@@ -4,6 +4,7 @@ import { Ionicons } from "@expo/vector-icons"
 import { useRouter } from "expo-router"
 import Avatar from "@/components/Avatar"
 import PressableScale from "@/components/PressableScale"
+import VoiceVideoTile from "@/components/VoiceVideoTile"
 import { useVoice } from "@/context/VoiceContext"
 
 // HU-19: a plain mic while transmitting; muted, the same mic crossed by a red
@@ -150,8 +151,7 @@ export default function VoiceScreen() {
                 key={p.id}
                 style={{
                   alignItems: "center",
-                  paddingVertical: isNarrow ? 18 : 28,
-                  paddingHorizontal: isNarrow ? 10 : 24,
+                  overflow: "hidden",
                   width: "47%",
                   minWidth: isNarrow ? 130 : 200,
                   backgroundColor: "rgba(255,255,255,0.04)",
@@ -163,17 +163,26 @@ export default function VoiceScreen() {
                     : {}),
                 }}
               >
-                {/* Avatar + mic-off badge */}
-                <View style={{ position: "relative" }}>
-                  <View style={{ borderRadius: 9999, padding: 3 }}>
+                <View
+                  style={{
+                    width: "100%",
+                    aspectRatio: 16 / 9,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: "rgba(0,0,0,0.22)",
+                  }}
+                >
+                  {p.camEnabled && p.videoTrack ? (
+                    <VoiceVideoTile track={p.videoTrack} mirrored={p.isLocal} />
+                  ) : (
                     <Avatar initials={p.avatar} uri={p.avatarUrl} size={isNarrow ? 52 : 68} />
-                  </View>
+                  )}
                   {!p.micEnabled ? (
                     <View
                       style={{
                         position: "absolute",
-                        right: -2,
-                        bottom: 0,
+                        right: 8,
+                        bottom: 8,
                         width: 26,
                         height: 26,
                         borderRadius: 9999,
@@ -189,22 +198,24 @@ export default function VoiceScreen() {
                   ) : null}
                 </View>
 
-                <Text style={{ color: "#E6F3F3", fontWeight: "700", marginTop: 14, fontSize: 14 }} numberOfLines={1}>
-                  {p.name}
-                  {p.isLocal ? <Text style={{ color: "#8DA8AC", fontWeight: "500" }}> (vos)</Text> : null}
-                </Text>
-                <Text style={{ fontSize: 11, marginTop: 3, color: "#8DA8AC" }}>
-                  {p.micEnabled ? "En la sala" : "Silenciado"}
-                </Text>
+                <View style={{ width: "100%", alignItems: "center", paddingHorizontal: 10, paddingVertical: 10 }}>
+                  <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 14 }} numberOfLines={1}>
+                    {p.name}
+                    {p.isLocal ? <Text style={{ color: "#8DA8AC", fontWeight: "500" }}> (vos)</Text> : null}
+                  </Text>
+                  <Text style={{ fontSize: 11, marginTop: 3, color: "#8DA8AC" }}>
+                    {p.micEnabled ? "En la sala" : "Silenciado"}
+                  </Text>
+                </View>
               </View>
             ))}
           </View>
         )}
       </ScrollView>
 
-      {micError ? (
+      {micError || voice.cameraError ? (
         <Text style={{ color: "#FF9E94", fontSize: 12, textAlign: "center", paddingHorizontal: 20, paddingBottom: 8 }}>
-          {micError}
+          {micError || voice.cameraError}
         </Text>
       ) : null}
 
@@ -243,6 +254,31 @@ export default function VoiceScreen() {
           </PressableScale>
           <Text style={{ color: "#C9DADC", fontWeight: "700", fontSize: 10 }}>
             {voice.micEnabled ? "Silenciar" : "Activar"}
+          </Text>
+        </View>
+
+        <View style={{ alignItems: "center", gap: 7, width: 88, opacity: connecting ? 0.5 : 1 }}>
+          <PressableScale
+            onPress={() => voice.toggleCamera()}
+            disabled={connecting}
+            accessibilityLabel={voice.camEnabled ? "Apagar cámara" : "Activar cámara"}
+            pressedScale={0.9}
+            hoverStyle={{ backgroundColor: "rgba(255,255,255,0.16)" }}
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 9999,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: voice.camEnabled ? "rgba(55,214,192,0.20)" : "rgba(255,255,255,0.10)",
+              borderWidth: 1,
+              borderColor: voice.camEnabled ? "rgba(55,214,192,0.50)" : "rgba(255,255,255,0.14)",
+            }}
+          >
+            <Ionicons name={voice.camEnabled ? "videocam" : "videocam-off"} size={22} color="#E6F3F3" />
+          </PressableScale>
+          <Text style={{ color: "#C9DADC", fontWeight: "700", fontSize: 10 }}>
+            {voice.camEnabled ? "Apagar" : "Activar cámara"}
           </Text>
         </View>
 

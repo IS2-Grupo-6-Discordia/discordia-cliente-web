@@ -12,7 +12,7 @@ import { useLocalSearchParams, useRouter } from "expo-router"
 import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
 import { login, loginWithGoogle } from "@/api/auth"
-import { useWakeState, wakeBackends } from "@/api/wake"
+import { useWakeProgress, useWakeState, wakeBackends } from "@/api/wake"
 import { ApiError, friendlyError } from "@/api/client"
 import { safeRedirect } from "@/lib/safeRedirect"
 import PressableScale from "@/components/PressableScale"
@@ -25,6 +25,7 @@ const GOOGLE_UNAVAILABLE =
 export default function LoginScreen() {
   const { setUser, signedOutReason, showSignedOutReason, clearSignedOutReason } = useAuth()
   const wake = useWakeState()
+  const wakeProgress = useWakeProgress()
   const router = useRouter()
   // Deep-link flow: when a logged-out user opens an invite, we arrive here with
   // `?redirect=/invite/<code>` so we can send them back once authenticated.
@@ -154,11 +155,38 @@ export default function LoginScreen() {
               ) : (
                 <Ionicons name="cloud-offline-outline" size={15} color="#F0C24B" />
               )}
-              <Text style={{ color: "#BFE6E1", fontSize: 12, flex: 1, lineHeight: 17 }}>
-                {wake === "waking"
-                  ? "Estamos despertando el servidor. La primera vez puede tardar hasta un minuto; podés ir completando tus datos."
-                  : "No pudimos conectar con el servidor. Revisá tu conexión y probá de nuevo."}
-              </Text>
+              {wake === "waking" ? (
+                <View style={{ flex: 1, gap: 3 }}>
+                  <Text style={{ color: "#E6F3F3", fontSize: 12.5, fontWeight: "700" }}>
+                    Despertando el servidor
+                  </Text>
+                  <Text style={{ color: "#BFE6E1", fontSize: 12, lineHeight: 17 }}>
+                    La primera vez puede tardar hasta un minuto; podés ir completando tus datos.
+                  </Text>
+                  <View
+                    style={{
+                      height: 4,
+                      borderRadius: 2,
+                      marginTop: 4,
+                      overflow: "hidden",
+                      backgroundColor: "rgba(55,214,192,0.15)",
+                    }}
+                  >
+                    <View
+                      style={{
+                        height: 4,
+                        borderRadius: 2,
+                        backgroundColor: "#37D6C0",
+                        width: `${wakeProgress.total ? (wakeProgress.awake / wakeProgress.total) * 100 : 0}%`,
+                      }}
+                    />
+                  </View>
+                </View>
+              ) : (
+                <Text style={{ color: "#BFE6E1", fontSize: 12, flex: 1, lineHeight: 17 }}>
+                  No pudimos conectar con el servidor. Revisá tu conexión y probá de nuevo.
+                </Text>
+              )}
             </View>
           ) : null}
 

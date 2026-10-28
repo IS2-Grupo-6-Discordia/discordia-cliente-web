@@ -12,6 +12,10 @@ const RETRY_DELAY_MS = 2_000
 const AWAKE_GRACE_MS = 5 * 60_000
 
 export type WakeState = "idle" | "waking" | "ready" | "failed"
+export interface WakeProgress {
+  awake: number
+  total: number
+}
 
 function wakeUrls(): string[] {
   const configured = process.env.EXPO_PUBLIC_WAKE_URLS
@@ -27,11 +31,18 @@ function wakeUrls(): string[] {
 let state: WakeState = "idle"
 let pending: Promise<WakeState> | null = null
 let lastReadyAt = 0
+let progress: WakeProgress = { awake: 0, total: 0 }
 const listeners = new Set<(s: WakeState) => void>()
+const progressListeners = new Set<(p: WakeProgress) => void>()
 
 function setState(next: WakeState) {
   state = next
   listeners.forEach((listener) => listener(next))
+}
+
+function setProgress(next: WakeProgress) {
+  progress = next
+  progressListeners.forEach((listener) => listener(next))
 }
 
 async function attempt(url: string): Promise<void> {
@@ -66,8 +77,17 @@ export function wakeBackends(): Promise<WakeState> {
   if (state === "ready" && Date.now() - lastReadyAt < AWAKE_GRACE_MS) return Promise.resolve("ready")
   if (pending) return pending
 
+  let awake = 0
+  setProgress({ awake, total: urls.length })
   setState("waking")
-  pending = Promise.all(urls.map(ping))
+  pending = Promise.all(
+    urls.map((url) =>
+      ping(url).then(() => {
+        awake += 1
+        setProgress({ awake, total: urls.length })
+      }),
+    ),
+  )
     .then(() => {
       lastReadyAt = Date.now()
       setState("ready")
@@ -90,6 +110,18 @@ export function useWakeState(): WakeState {
     setCurrent(state)
     return () => {
       listeners.delete(setCurrent)
+    }
+  }, [])
+  return current
+}
+
+export function useWakeProgress(): WakeProgress {
+  const [current, setCurrent] = useState<WakeProgress>(progress)
+  useEffect(() => {
+    progressListeners.add(setCurrent)
+    setCurrent(progress)
+    return () => {
+      progressListeners.delete(setCurrent)
     }
   }, [])
   return current

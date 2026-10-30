@@ -6,7 +6,15 @@ import { getUsersBatch, initials } from "@/api/auth"
 import { friendlyError } from "@/api/client"
 import { useAuth } from "@/context/AuthContext"
 import { playJoinSound } from "@/lib/joinSound"
-import { CameraError, connectVoiceRoom, MicrophoneError, VoiceAbortedError, voiceSupported } from "@/lib/voiceRoom"
+import {
+  CameraError,
+  connectVoiceRoom,
+  MicrophoneError,
+  ScreenShareCancelledError,
+  screenShareSupported,
+  VoiceAbortedError,
+  voiceSupported,
+} from "@/lib/voiceRoom"
 import type { VoiceAudioTrack, VoiceRoomHandle, VoiceRoomParticipant, VoiceDropReason, VoiceVideoTrack } from "@/lib/voiceRoom"
 
 // HU-17: one voice connection per session, shared by the channel list (chat)
@@ -31,7 +39,9 @@ export interface VoiceParticipant {
   speaking?: boolean
   locallyMuted?: boolean
   videoTrack?: VoiceVideoTrack | null
+  screenTrack?: VoiceVideoTrack | null
   audioTrack?: VoiceAudioTrack | null
+  isScreen?: boolean
 }
 
 export type VoiceStatus = "idle" | "connecting" | "connected"
@@ -57,6 +67,10 @@ interface VoiceState {
   camEnabled: boolean
   cameraError: string
   toggleCamera: () => Promise<void>
+  screenShareSupported: boolean
+  screenSharing: boolean
+  screenShareError: string
+  toggleScreenShare: () => Promise<void>
   toggleLocalMute: (participantId: string) => void
 }
 
@@ -102,6 +116,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
   const [profiles, setProfiles] = useState<Record<string, { name: string; avatarUrl?: string | null }>>({})
   const [dropNotice, setDropNotice] = useState("")
   const [cameraError, setCameraError] = useState("")
+  const [screenShareError, setScreenShareError] = useState("")
   const [locallyMuted, setLocallyMuted] = useState<Set<string>>(() => new Set())
 
   const handleRef = useRef<VoiceRoomHandle | null>(null)
@@ -118,6 +133,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     setChannel(null)
     setRoomParticipants([])
     setCameraError("")
+    setScreenShareError("")
   }, [])
 
   const join = useCallback(
@@ -233,17 +249,20 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
       .catch(() => undefined)
   }, [roomParticipants, profiles])
 
-  const knownRemotesRef = useRef<Set<string> | null>(null)
+  const knownRemotesRef = useRef<{ members: Set<string>; sharers: Set<string> } | null>(null)
 
   useEffect(() => {
     if (status !== "connected") {
       knownRemotesRef.current = null
       return
     }
-    const remotes = roomParticipants.filter((p) => !p.isLocal).map((p) => p.identity)
+    const remotes = roomParticipants.filter((p) => !p.isLocal)
+    const members = remotes.map((p) => p.identity)
+    const sharers = remotes.filter((p) => p.screenTrack).map((p) => p.identity)
     const known = knownRemotesRef.current
-    knownRemotesRef.current = new Set(remotes)
-    if (known && remotes.some((id) => !known.has(id))) playJoinSound()
+    knownRemotesRef.current = { members: new Set(members), sharers: new Set(sharers) }
+    if (!known) return
+    if (members.some((id) => !known.members.has(id)) || sharers.some((id) => !known.sharers.has(id))) playJoinSound()
   }, [status, roomParticipants])
 
   useEffect(() => {
@@ -277,6 +296,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
       speaking: p.speaking,
       locallyMuted: !p.isLocal && locallyMuted.has(p.identity),
       videoTrack: p.videoTrack,
+      screenTrack: p.screenTrack,
       audioTrack: p.audioTrack,
     }
   })
@@ -317,6 +337,25 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     }
   }, [camEnabled])
 
+  const screenSharing = !!roomParticipants.find((p) => p.isLocal)?.screenTrack
+  const screenShareBusyRef = useRef(false)
+
+  const toggleScreenShare = useCallback(async () => {
+    const handle = handleRef.current
+    if (!handle || screenShareBusyRef.current) return
+    screenShareBusyRef.current = true
+    setScreenShareError("")
+    try {
+      await handle.setScreenShareEnabled(!screenSharing)
+    } catch (err) {
+      if (!(err instanceof ScreenShareCancelledError)) {
+        setScreenShareError("No pudimos compartir tu pantalla. Puede que el canal no tenga habilitado compartir pantalla.")
+      }
+    } finally {
+      screenShareBusyRef.current = false
+    }
+  }, [screenSharing])
+
   return (
     <VoiceContext.Provider
       value={{
@@ -333,6 +372,10 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         camEnabled,
         cameraError,
         toggleCamera,
+        screenShareSupported,
+        screenSharing,
+        screenShareError,
+        toggleScreenShare,
         toggleLocalMute,
       }}
     >

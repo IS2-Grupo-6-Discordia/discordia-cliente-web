@@ -9,6 +9,7 @@ export interface VoiceRoomParticipant {
   camEnabled: boolean
   speaking: boolean
   videoTrack: VoiceVideoTrack | null
+  screenTrack: VoiceVideoTrack | null
   audioTrack: VoiceAudioTrack | null
 }
 
@@ -52,6 +53,13 @@ export interface VoiceRoomHandle {
   setMicEnabled: (enabled: boolean) => Promise<void>
   setCameraEnabled: (enabled: boolean) => Promise<void>
   setParticipantMuted: (identity: string, muted: boolean) => void
+  setScreenShareEnabled: (enabled: boolean) => Promise<void>
+}
+
+export class ScreenShareCancelledError extends Error {
+  constructor() {
+    super("screen-share-cancelled")
+  }
 }
 
 export class CameraError extends Error {

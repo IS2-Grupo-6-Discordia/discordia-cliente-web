@@ -15,6 +15,7 @@
         "backgroundColor": "#0A1620"
       },
       "package": "com.discordia.app",
+      "permissions": ["android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"],
       "intentFilters": [
         {
           "action": "VIEW",
@@ -37,7 +38,7 @@
       "expo-router",
       "expo-font",
       "expo-asset",
-      "@livekit/react-native-expo-plugin",
+      ["@livekit/react-native-expo-plugin", { "android": { "enableScreenShareService": true } }],
       [
         "@config-plugins/react-native-webrtc",
         {

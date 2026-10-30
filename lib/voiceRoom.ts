@@ -6,7 +6,7 @@ import { PermissionsAndroid, Platform } from "react-native"
 import { AudioSession, registerGlobals } from "@livekit/react-native"
 import { DisconnectReason, Room, RoomEvent, Track, VideoPresets } from "livekit-client"
 import type { Participant } from "livekit-client"
-import { CameraError, MicrophoneError, VoiceAbortedError } from "./voiceRoom.types"
+import { CameraError, MicrophoneError, ScreenShareCancelledError, VoiceAbortedError } from "./voiceRoom.types"
 import type { VoiceAudioTrack, VoiceRoomEvents, VoiceRoomHandle, VoiceRoomParticipant, VoiceVideoTrack } from "./voiceRoom.types"
 
 export * from "./voiceRoom.types"
@@ -16,6 +16,15 @@ export * from "./voiceRoom.types"
 registerGlobals()
 
 export const voiceSupported: boolean = true
+
+export const screenShareSupported: boolean = Platform.OS === "android"
+
+function screenTrack(participant: Participant): VoiceVideoTrack | null {
+  const publication = participant.getTrackPublication(Track.Source.ScreenShare)
+  return publication
+    ? ({ participant, publication, source: Track.Source.ScreenShare } as unknown as VoiceVideoTrack)
+    : null
+}
 
 function microphoneTrack(participant: Participant): VoiceAudioTrack | null {
   const track = participant.getTrackPublication(Track.Source.Microphone)?.track
@@ -35,6 +44,7 @@ function snapshot(room: Room): VoiceRoomParticipant[] {
       videoTrack: localPublication
         ? ({ participant: local, publication: localPublication, source: Track.Source.Camera } as unknown as VoiceVideoTrack)
         : null,
+      screenTrack: screenTrack(local),
       audioTrack: microphoneTrack(local),
     },
   ]
@@ -49,6 +59,7 @@ function snapshot(room: Room): VoiceRoomParticipant[] {
       videoTrack: publication
         ? ({ participant: p, publication, source: Track.Source.Camera } as unknown as VoiceVideoTrack)
         : null,
+      screenTrack: screenTrack(p),
       audioTrack: microphoneTrack(p),
     })
   })
@@ -204,5 +215,17 @@ export async function connectVoiceRoom(
     room.remoteParticipants.get(identity)?.setVolume(muted ? 0 : 1, Track.Source.Microphone)
   }
 
-  return { disconnect, setMicEnabled, setCameraEnabled, setParticipantMuted }
+  const setScreenShareEnabled = async (enabled: boolean) => {
+    try {
+      await room.localParticipant.setScreenShareEnabled(enabled)
+    } catch (err) {
+      const name = err instanceof Error ? err.name : ""
+      if (name === "NotAllowedError" || name === "AbortError" || name === "SecurityError") throw new ScreenShareCancelledError()
+      throw err
+    } finally {
+      emit()
+    }
+  }
+
+  return { disconnect, setMicEnabled, setCameraEnabled, setParticipantMuted, setScreenShareEnabled }
 }

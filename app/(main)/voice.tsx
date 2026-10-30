@@ -104,6 +104,15 @@ export default function VoiceScreen() {
           backgroundColor: "rgba(255,255,255,0.03)",
         }}
       >
+        <PressableScale
+          onPress={() => router.push("/(main)/chat")}
+          accessibilityLabel="Volver al chat"
+          pressedScale={0.9}
+          hoverStyle={{ backgroundColor: "rgba(255,255,255,0.10)" }}
+          style={{ width: 34, height: 34, borderRadius: 9999, alignItems: "center", justifyContent: "center", marginLeft: -6 }}
+        >
+          <Ionicons name="chevron-back" size={20} color="#E6F3F3" />
+        </PressableScale>
         <Ionicons name="volume-high" size={17} color={connecting ? "#F0C24B" : "#4FD69C"} />
         <View style={{ flex: 1 }}>
           <Text style={{ color: "#E6F3F3", fontWeight: "700", fontSize: 13.5 }} numberOfLines={1}>
@@ -150,9 +159,9 @@ export default function VoiceScreen() {
         />
       )}
 
-      {micError || voice.cameraError ? (
+      {micError || voice.cameraError || voice.screenShareError ? (
         <Text style={{ color: "#FF9E94", fontSize: 12, textAlign: "center", paddingHorizontal: 20, paddingBottom: 8 }}>
-          {micError || voice.cameraError}
+          {micError || voice.cameraError || voice.screenShareError}
         </Text>
       ) : null}
 
@@ -169,7 +178,7 @@ export default function VoiceScreen() {
         }}
       >
         {/* HU-19: mute toggle */}
-        <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 76 : 88, opacity: connecting ? 0.5 : 1 }}>
+        <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 66 : 88, opacity: connecting ? 0.5 : 1 }}>
           <PressableScale
             onPress={handleToggleMic}
             disabled={connecting}
@@ -194,7 +203,7 @@ export default function VoiceScreen() {
           </Text>
         </View>
 
-        <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 76 : 88, opacity: connecting ? 0.5 : 1 }}>
+        <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 66 : 88, opacity: connecting ? 0.5 : 1 }}>
           <PressableScale
             onPress={() => voice.toggleCamera()}
             disabled={connecting}
@@ -219,7 +228,34 @@ export default function VoiceScreen() {
           </Text>
         </View>
 
-        <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 76 : 88, opacity: connecting ? 0.5 : 1 }}>
+        {voice.screenShareSupported ? (
+          <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 66 : 88, opacity: connecting ? 0.5 : 1 }}>
+            <PressableScale
+              onPress={() => voice.toggleScreenShare()}
+              disabled={connecting}
+              accessibilityLabel={voice.screenSharing ? "Dejar de compartir pantalla" : "Compartir pantalla"}
+              pressedScale={0.9}
+              hoverStyle={{ backgroundColor: "rgba(255,255,255,0.16)" }}
+              style={{
+                width: 52,
+                height: 52,
+                borderRadius: 9999,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: voice.screenSharing ? "rgba(55,214,192,0.20)" : "rgba(255,255,255,0.10)",
+                borderWidth: 1,
+                borderColor: voice.screenSharing ? "rgba(55,214,192,0.50)" : "rgba(255,255,255,0.14)",
+              }}
+            >
+              <Ionicons name={voice.screenSharing ? "stop-circle-outline" : "desktop-outline"} size={22} color="#E6F3F3" />
+            </PressableScale>
+            <Text style={{ color: "#C9DADC", fontWeight: "700", fontSize: 10, textAlign: "center" }}>
+              {voice.screenSharing ? "Dejar de compartir" : "Compartir pantalla"}
+            </Text>
+          </View>
+        ) : null}
+
+        <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 66 : 88, opacity: connecting ? 0.5 : 1 }}>
           <PressableScale
             onPress={() => setLayoutMenuOpen((open) => !open)}
             disabled={connecting}
@@ -242,9 +278,12 @@ export default function VoiceScreen() {
           <Text style={{ color: "#C9DADC", fontWeight: "700", fontSize: 10 }}>Diseño</Text>
         </View>
 
-        <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 76 : 88 }}>
+        <View style={{ alignItems: "center", gap: 7, width: isNarrow ? 66 : 88 }}>
           <PressableScale
-            onPress={() => voice.leave()}
+            onPress={() => {
+              voice.leave()
+              router.push("/(main)/chat")
+            }}
             accessibilityLabel="Desconectarse del canal de voz"
             pressedScale={0.9}
             hoverStyle={{ backgroundColor: "#FF6B5C" }}

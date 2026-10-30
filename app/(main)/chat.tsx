@@ -1581,6 +1581,7 @@ export default function ChatScreen() {
         serverName: activeServerName,
       })
       setVoiceJoinTarget(null)
+      router.push("/(main)/voice")
     } catch (err) {
       setVoiceJoinError(err instanceof Error ? err.message : friendlyError(err))
     } finally {
@@ -2392,6 +2393,7 @@ export default function ChatScreen() {
                       >
                         {p.isLocal ? `${p.name} (vos)` : p.name}
                       </Text>
+                      {p.screenTrack ? <Ionicons name="desktop-outline" size={11} color="#37D6C0" /> : null}
                       {p.locallyMuted ? <Ionicons name="volume-mute" size={11} color="#F0C24B" /> : null}
                       {!p.micEnabled ? <Ionicons name="mic-off" size={11} color="#FF9E94" /> : null}
                     </View>

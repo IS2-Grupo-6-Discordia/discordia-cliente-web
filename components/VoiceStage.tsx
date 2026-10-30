@@ -44,6 +44,8 @@ function fitGrid(count: number, width: number, height: number) {
 function pickMain(participants: VoiceParticipant[], pinnedId: string | null) {
   return (
     participants.find((p) => p.id === pinnedId) ??
+    participants.find((p) => p.isScreen && !p.isLocal) ??
+    participants.find((p) => p.isScreen) ??
     participants.find((p) => !p.isLocal && p.speaking) ??
     participants.find((p) => !p.isLocal && p.camEnabled && p.videoTrack) ??
     participants.find((p) => !p.isLocal) ??
@@ -189,7 +191,7 @@ function Tile({
           height: "100%",
           borderRadius: radius,
           overflow: "hidden",
-          backgroundColor: "#16262F",
+          backgroundColor: participant.isScreen ? "#05090D" : "#16262F",
           alignItems: "center",
           justifyContent: "center",
           ...(Platform.OS === "web" ? ({ cursor: "default" } as object) : {}),
@@ -197,7 +199,11 @@ function Tile({
       >
         {hasVideo ? (
           <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}>
-            <VoiceVideoTile track={participant.videoTrack!} mirrored={participant.isLocal} />
+            <VoiceVideoTile
+              track={participant.videoTrack!}
+              mirrored={participant.isLocal && !participant.isScreen}
+              fit={participant.isScreen ? "contain" : "cover"}
+            />
           </View>
         ) : (
           <View style={{ alignItems: "center", justifyContent: "center" }}>
@@ -285,8 +291,9 @@ function Tile({
           }}
         >
           {pinned ? <Ionicons name="pin" size={10} color="#37D6C0" /> : null}
+          {participant.isScreen ? <Ionicons name="desktop-outline" size={11} color="#37D6C0" /> : null}
           <Text numberOfLines={1} style={{ color: "#F2F7F7", fontSize: compact ? 10.5 : 12, fontWeight: "600", flexShrink: 1 }}>
-            {participant.isLocal ? `${participant.name} (vos)` : participant.name}
+            {participant.isLocal && !participant.isScreen ? `${participant.name} (vos)` : participant.name}
           </Text>
         </View>
       </Pressable>
@@ -318,7 +325,7 @@ function Tile({
               </Text>
             )}
           </Pressable>
-          {participant.isLocal ? null : (
+          {participant.isLocal || participant.isScreen ? null : (
             <Pressable
               onPress={() => {
                 setTouched(false)
@@ -386,6 +393,21 @@ function OverflowTile({ hidden, height }: { hidden: VoiceParticipant[]; height: 
       </Text>
     </View>
   )
+}
+
+function screenEntry(owner: VoiceParticipant): VoiceParticipant {
+  return {
+    ...owner,
+    id: `${owner.id}:screen`,
+    name: owner.isLocal ? "Tu pantalla" : `Pantalla de ${owner.name}`,
+    isScreen: true,
+    camEnabled: true,
+    videoTrack: owner.screenTrack,
+    micEnabled: true,
+    speaking: false,
+    locallyMuted: false,
+    audioTrack: null,
+  }
 }
 
 type Frame = { x: number; y: number; w: number; h: number }
@@ -518,8 +540,8 @@ function computeItems(
         ...stripItems(others, capacity, (offset) => ({ x: W - stripW, y: offset, w: stripW, h: thumbH }), thumbH, H),
       ]
     }
-    const stripH = Math.min(110, Math.max(72, H * 0.18))
-    const thumbW = stripH * RATIO
+    const thumbW = Math.min(Math.min(110, Math.max(72, H * 0.18)) * RATIO, (W - GAP * 2) / 3)
+    const stripH = thumbW / RATIO
     const areaH = H - stripH - GAP
     const fit = fitInCell(W, areaH)
     const capacity = Math.max(1, Math.floor((W + GAP) / (thumbW + GAP)))
@@ -576,12 +598,14 @@ export default function VoiceStage({
 
   const { width: W, height: H } = size
   const narrow = W > 0 && W < 600
-  const pinned = participants.some((p) => p.id === pinnedId) ? pinnedId : null
-  const main = pickMain(participants, pinned)
+  const entries = [...participants.filter((p) => p.screenTrack).map(screenEntry), ...participants]
+  const pinned = entries.some((p) => p.id === pinnedId) ? pinnedId : null
+  const main = pickMain(entries, pinned)
+  const sharing = entries.some((p) => p.isScreen)
   const effective: VoiceLayout =
-    participants.length <= 1 ? "mosaic" : layout === "auto" ? (pinned ? "sidebar" : "mosaic") : layout
+    entries.length <= 1 ? "mosaic" : layout === "auto" ? (pinned || sharing ? "sidebar" : "mosaic") : layout
 
-  const items = W > 0 && H > 0 && main ? computeItems(participants, effective, main, pinned, W, H, narrow) : []
+  const items = W > 0 && H > 0 && main ? computeItems(entries, effective, main, pinned, W, H, narrow) : []
   const liveKeys = new Set(items.map((item) => item.key))
   const instant = lastSize.current !== size
 

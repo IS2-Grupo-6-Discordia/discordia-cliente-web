@@ -1,28 +1,16 @@
 import { Tabs, useRouter, Redirect } from "expo-router"
-import { useSafeAreaInsets } from "react-native-safe-area-context"
 import { View, Text, TouchableOpacity, Platform } from "react-native"
-import type { ColorValue } from "react-native"
-import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "@/context/AuthContext"
 import UserMenu from "@/components/UserMenu"
 import SessionSplash from "@/components/SessionSplash"
 import { useWakeState } from "@/api/wake"
 import { VoiceProvider } from "@/context/VoiceContext"
 
-// Maps each tab to a filled/outline Ionicons pair so the bar reads as real
-// navigation (the default had no icons, which rendered as confusing ▼ glyphs).
-type IoniconName = React.ComponentProps<typeof Ionicons>["name"]
-function tabIcon(active: IoniconName, inactive: IoniconName) {
-  return ({ color, size, focused }: { color: ColorValue; size: number; focused: boolean }) => (
-    <Ionicons name={focused ? active : inactive} size={size} color={color} />
-  )
-}
 
 export default function MainLayout() {
   const { isLoggedIn, isLoading } = useAuth()
   const wake = useWakeState()
   const router = useRouter()
-  const insets = useSafeAreaInsets()
 
   // Al recargar una ruta protegida (p. ej. /(main)/chat) este layout corre antes
   // que index.tsx, así que también hay que esperar la rehidratación acá: si no,
@@ -80,21 +68,7 @@ export default function MainLayout() {
               <UserMenu />
             </View>
           ),
-          tabBarStyle: {
-            backgroundColor: "#0A1620",
-            borderTopColor: "rgba(255,255,255,0.13)",
-            borderTopWidth: 1,
-            // Room for icon + label: at 62 the labels got clipped on phones.
-            height: 68 + insets.bottom,
-            paddingTop: 6,
-            paddingBottom: 10 + insets.bottom,
-          },
-          tabBarActiveTintColor: "#37D6C0",
-          tabBarInactiveTintColor: "#8DA8AC",
-          tabBarLabelStyle: {
-            fontSize: 11,
-            fontWeight: "600",
-          },
+          tabBarStyle: { display: "none" },
           sceneStyle: { backgroundColor: "#0A1620" },
         }}
       >
@@ -102,24 +76,18 @@ export default function MainLayout() {
           name="chat"
           options={{
             title: "Chat",
-            tabBarLabel: "Chat",
-            tabBarIcon: tabIcon("chatbubble-ellipses", "chatbubble-ellipses-outline"),
           }}
         />
         <Tabs.Screen
           name="voice"
           options={{
             title: "Voz",
-            tabBarLabel: "Voz",
-            tabBarIcon: tabIcon("headset", "headset-outline"),
           }}
         />
         <Tabs.Screen
           name="backoffice"
           options={{
             title: "Backoffice",
-            tabBarLabel: "Backoffice",
-            tabBarIcon: tabIcon("shield-checkmark", "shield-checkmark-outline"),
           }}
         />
         <Tabs.Screen

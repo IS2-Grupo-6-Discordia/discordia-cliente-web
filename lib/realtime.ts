@@ -1,4 +1,5 @@
 import { ApiError } from "@/api/client"
+import { newRequestId, newTraceparent } from "@/api/trace"
 
 // Generic client for the services' realtime WebSockets (ADR 0006, contract in
 // documentacion/tiempo-real.md). KrakenD CE can't proxy WebSockets, so the
@@ -75,7 +76,9 @@ export class RealtimeConnection {
   }
 
   private send(msg: RealtimeMessage) {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg))
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ ...msg, request_id: newRequestId() }))
+    }
   }
 
   private async connect() {
@@ -97,7 +100,7 @@ export class RealtimeConnection {
     if (this.stopped) return
 
     const separator = ticket.url.includes("?") ? "&" : "?"
-    const ws = new WebSocket(`${ticket.url}${separator}ticket=${encodeURIComponent(ticket.ticket)}`)
+    const ws = new WebSocket(`${ticket.url}${separator}ticket=${encodeURIComponent(ticket.ticket)}&traceparent=${newTraceparent()}`)
     this.ws = ws
 
     ws.onopen = () => {
@@ -111,7 +114,9 @@ export class RealtimeConnection {
     ws.onmessage = (event) => {
       if (this.ws !== ws || typeof event.data !== "string") return
       try {
-        this.options.onMessage(JSON.parse(event.data) as RealtimeMessage)
+        const msg = JSON.parse(event.data) as RealtimeMessage
+        if (msg.type === "error") console.warn("[realtime] error", msg.code, msg.detail, msg.request_id)
+        this.options.onMessage(msg)
       } catch {
         // A frame we can't parse is a server bug; skip it.
       }

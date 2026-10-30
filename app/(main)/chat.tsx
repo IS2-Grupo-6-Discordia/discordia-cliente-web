@@ -2369,12 +2369,30 @@ export default function ChatScreen() {
                   {roster.map((p) => (
                     <View
                       key={p.id}
-                      style={{ flexDirection: "row", alignItems: "center", gap: 7, paddingLeft: 30, paddingRight: 12, paddingVertical: isNarrow ? 5 : 3 }}
+                      style={{ flexDirection: "row", alignItems: "center", gap: 7, paddingLeft: 27, paddingRight: 12, paddingVertical: isNarrow ? 5 : 3 }}
                     >
-                      <Avatar initials={p.avatar} uri={p.avatarUrl} size={18} />
-                      <Text style={{ flex: 1, color: "#8DA8AC", fontSize: 11.5 }} numberOfLines={1}>
+                      <View
+                        style={{
+                          borderRadius: 9999,
+                          padding: 1,
+                          borderWidth: 2,
+                          borderColor: p.speaking && p.micEnabled ? "#37D6C0" : "transparent",
+                        }}
+                      >
+                        <Avatar initials={p.avatar} uri={p.avatarUrl} size={18} />
+                      </View>
+                      <Text
+                        style={{
+                          flex: 1,
+                          color: p.speaking && p.micEnabled ? "#E6F3F3" : "#8DA8AC",
+                          fontSize: 11.5,
+                          fontWeight: p.speaking && p.micEnabled ? "600" : "400",
+                        }}
+                        numberOfLines={1}
+                      >
                         {p.isLocal ? `${p.name} (vos)` : p.name}
                       </Text>
+                      {p.locallyMuted ? <Ionicons name="volume-mute" size={11} color="#F0C24B" /> : null}
                       {!p.micEnabled ? <Ionicons name="mic-off" size={11} color="#FF9E94" /> : null}
                     </View>
                   ))}

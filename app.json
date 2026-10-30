@@ -50,7 +50,8 @@
         {
           "iosUrlScheme": "com.googleusercontent.apps.357428623304-lnu4vkc3psjuocv2m984ic4tqglbpfes"
         }
-      ]
+      ],
+      "expo-audio"
     ],
     "extra": {
       "eas": {

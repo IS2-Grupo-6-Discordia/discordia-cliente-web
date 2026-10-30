@@ -5,6 +5,7 @@ import { joinVoiceChannel } from "@/api/voice"
 import { getUsersBatch, initials } from "@/api/auth"
 import { friendlyError } from "@/api/client"
 import { useAuth } from "@/context/AuthContext"
+import { playJoinSound } from "@/lib/joinSound"
 import { CameraError, connectVoiceRoom, MicrophoneError, VoiceAbortedError, voiceSupported } from "@/lib/voiceRoom"
 import type { VoiceRoomHandle, VoiceRoomParticipant, VoiceDropReason, VoiceVideoTrack } from "@/lib/voiceRoom"
 
@@ -227,6 +228,19 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => undefined)
   }, [roomParticipants, profiles])
+
+  const knownRemotesRef = useRef<Set<string> | null>(null)
+
+  useEffect(() => {
+    if (status !== "connected") {
+      knownRemotesRef.current = null
+      return
+    }
+    const remotes = roomParticipants.filter((p) => !p.isLocal).map((p) => p.identity)
+    const known = knownRemotesRef.current
+    knownRemotesRef.current = new Set(remotes)
+    if (known && remotes.some((id) => !known.has(id))) playJoinSound()
+  }, [status, roomParticipants])
 
   const participants: VoiceParticipant[] = roomParticipants.map((p) => {
     const profile = p.isLocal && user ? { name: user.name, avatarUrl: user.avatarUrl } : profiles[p.identity]

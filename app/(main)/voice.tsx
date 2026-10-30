@@ -146,6 +146,7 @@ export default function VoiceScreen() {
           layout={layout}
           pinnedId={pinnedId}
           onTogglePin={(id) => setPinnedId((current) => (current === id ? null : id))}
+          onToggleLocalMute={voice.toggleLocalMute}
         />
       )}
 

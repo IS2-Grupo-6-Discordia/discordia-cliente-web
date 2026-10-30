@@ -4,7 +4,7 @@
 import { DisconnectReason, Room, RoomEvent, Track, VideoPresets } from "livekit-client"
 import type { Participant, RemoteTrack } from "livekit-client"
 import { CameraError, MicrophoneError, VoiceAbortedError } from "./voiceRoom.types"
-import type { VoiceRoomEvents, VoiceRoomHandle, VoiceRoomParticipant, VoiceVideoTrack } from "./voiceRoom.types"
+import type { VoiceAudioTrack, VoiceRoomEvents, VoiceRoomHandle, VoiceRoomParticipant, VoiceVideoTrack } from "./voiceRoom.types"
 
 export * from "./voiceRoom.types"
 
@@ -14,6 +14,11 @@ export const voiceSupported: boolean =
 function cameraTrack(participant: Participant): VoiceVideoTrack | null {
   const track = participant.getTrackPublication(Track.Source.Camera)?.track
   return track ? (track as unknown as VoiceVideoTrack) : null
+}
+
+function microphoneTrack(participant: Participant): VoiceAudioTrack | null {
+  const track = participant.getTrackPublication(Track.Source.Microphone)?.track
+  return track ? (track as unknown as VoiceAudioTrack) : null
 }
 
 function snapshot(room: Room): VoiceRoomParticipant[] {
@@ -26,6 +31,7 @@ function snapshot(room: Room): VoiceRoomParticipant[] {
       camEnabled: local.isCameraEnabled,
       speaking: local.isSpeaking,
       videoTrack: cameraTrack(local),
+      audioTrack: microphoneTrack(local),
     },
   ]
   room.remoteParticipants.forEach((p) => {
@@ -36,6 +42,7 @@ function snapshot(room: Room): VoiceRoomParticipant[] {
       camEnabled: p.isCameraEnabled,
       speaking: p.isSpeaking,
       videoTrack: cameraTrack(p),
+      audioTrack: microphoneTrack(p),
     })
   })
   return list
@@ -186,5 +193,9 @@ export async function connectVoiceRoom(
   }
 
   emit()
-  return { disconnect, setMicEnabled, setCameraEnabled }
+  const setParticipantMuted = (identity: string, muted: boolean) => {
+    room.remoteParticipants.get(identity)?.setVolume(muted ? 0 : 1, Track.Source.Microphone)
+  }
+
+  return { disconnect, setMicEnabled, setCameraEnabled, setParticipantMuted }
 }

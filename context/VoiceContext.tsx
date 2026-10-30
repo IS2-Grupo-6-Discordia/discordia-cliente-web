@@ -7,7 +7,7 @@ import { friendlyError } from "@/api/client"
 import { useAuth } from "@/context/AuthContext"
 import { playJoinSound } from "@/lib/joinSound"
 import { CameraError, connectVoiceRoom, MicrophoneError, VoiceAbortedError, voiceSupported } from "@/lib/voiceRoom"
-import type { VoiceRoomHandle, VoiceRoomParticipant, VoiceDropReason, VoiceVideoTrack } from "@/lib/voiceRoom"
+import type { VoiceAudioTrack, VoiceRoomHandle, VoiceRoomParticipant, VoiceDropReason, VoiceVideoTrack } from "@/lib/voiceRoom"
 
 // HU-17: one voice connection per session, shared by the channel list (chat)
 // and the Voz tab. It lives in the (main) layout so switching tabs never drops
@@ -29,7 +29,9 @@ export interface VoiceParticipant {
   micEnabled: boolean
   camEnabled?: boolean
   speaking?: boolean
+  locallyMuted?: boolean
   videoTrack?: VoiceVideoTrack | null
+  audioTrack?: VoiceAudioTrack | null
 }
 
 export type VoiceStatus = "idle" | "connecting" | "connected"
@@ -55,6 +57,7 @@ interface VoiceState {
   camEnabled: boolean
   cameraError: string
   toggleCamera: () => Promise<void>
+  toggleLocalMute: (participantId: string) => void
 }
 
 const DROP_MESSAGES: Record<VoiceDropReason, string> = {
@@ -99,6 +102,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
   const [profiles, setProfiles] = useState<Record<string, { name: string; avatarUrl?: string | null }>>({})
   const [dropNotice, setDropNotice] = useState("")
   const [cameraError, setCameraError] = useState("")
+  const [locallyMuted, setLocallyMuted] = useState<Set<string>>(() => new Set())
 
   const handleRef = useRef<VoiceRoomHandle | null>(null)
   // Bumped on every join/leave so a slow, superseded attempt can't overwrite
@@ -242,6 +246,23 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     if (known && remotes.some((id) => !known.has(id))) playJoinSound()
   }, [status, roomParticipants])
 
+  useEffect(() => {
+    const handle = handleRef.current
+    if (!handle) return
+    roomParticipants.forEach((p) => {
+      if (!p.isLocal) handle.setParticipantMuted(p.identity, locallyMuted.has(p.identity))
+    })
+  }, [roomParticipants, locallyMuted])
+
+  const toggleLocalMute = useCallback((participantId: string) => {
+    setLocallyMuted((current) => {
+      const next = new Set(current)
+      if (next.has(participantId)) next.delete(participantId)
+      else next.add(participantId)
+      return next
+    })
+  }, [])
+
   const participants: VoiceParticipant[] = roomParticipants.map((p) => {
     const profile = p.isLocal && user ? { name: user.name, avatarUrl: user.avatarUrl } : profiles[p.identity]
     const name = profile?.name ?? "Miembro"
@@ -254,7 +275,9 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
       micEnabled: p.micEnabled,
       camEnabled: p.camEnabled,
       speaking: p.speaking,
+      locallyMuted: !p.isLocal && locallyMuted.has(p.identity),
       videoTrack: p.videoTrack,
+      audioTrack: p.audioTrack,
     }
   })
 
@@ -310,6 +333,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         camEnabled,
         cameraError,
         toggleCamera,
+        toggleLocalMute,
       }}
     >
       {children}

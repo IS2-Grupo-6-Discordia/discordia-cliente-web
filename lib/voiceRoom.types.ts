@@ -9,12 +9,17 @@ export interface VoiceRoomParticipant {
   camEnabled: boolean
   speaking: boolean
   videoTrack: VoiceVideoTrack | null
+  audioTrack: VoiceAudioTrack | null
 }
 
 // Platform-owned LiveKit track reference. UI components cast it only in their
 // platform-specific implementation.
 export interface VoiceVideoTrack {
   readonly __voiceVideoTrack?: never
+}
+
+export interface VoiceAudioTrack {
+  readonly __voiceAudioTrack?: never
 }
 
 // Why the room dropped without the user asking for it.
@@ -46,6 +51,7 @@ export interface VoiceRoomHandle {
   // LiveKit's mute events. Rejects with MicrophoneError if unmuting fails.
   setMicEnabled: (enabled: boolean) => Promise<void>
   setCameraEnabled: (enabled: boolean) => Promise<void>
+  setParticipantMuted: (identity: string, muted: boolean) => void
 }
 
 export class CameraError extends Error {

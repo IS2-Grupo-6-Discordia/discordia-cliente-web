@@ -2392,6 +2392,7 @@ export default function ChatScreen() {
                       >
                         {p.isLocal ? `${p.name} (vos)` : p.name}
                       </Text>
+                      {p.locallyMuted ? <Ionicons name="volume-mute" size={11} color="#F0C24B" /> : null}
                       {!p.micEnabled ? <Ionicons name="mic-off" size={11} color="#FF9E94" /> : null}
                     </View>
                   ))}

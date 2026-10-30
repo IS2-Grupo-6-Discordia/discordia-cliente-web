@@ -5,6 +5,8 @@ import { Ionicons } from "@expo/vector-icons"
 import Avatar from "@/components/Avatar"
 import VoiceVideoTile from "@/components/VoiceVideoTile"
 import type { VoiceParticipant } from "@/context/VoiceContext"
+import { useAudioBands } from "@/lib/audioBands"
+import type { VoiceAudioTrack } from "@/lib/voiceRoom"
 
 export type VoiceLayout = "auto" | "mosaic" | "spotlight" | "sidebar"
 
@@ -71,11 +73,7 @@ function SpeakingIndicator({ compact }: { compact: boolean }) {
   const barHeight = compact ? 10 : 13
   return (
     <View
-      pointerEvents="none"
       style={{
-        position: "absolute",
-        top: 8,
-        right: 8,
         width: size,
         height: size,
         borderRadius: 9999,
@@ -96,6 +94,36 @@ function SpeakingIndicator({ compact }: { compact: boolean }) {
   )
 }
 
+function SpeakingHalo({ size, track }: { size: number; track: VoiceAudioTrack | null | undefined }) {
+  const bands = useAudioBands(track)
+  const raw = ((bands[0] ?? 0) + (bands[1] ?? 0) + (bands[2] ?? 0)) / 3
+  const peak = useRef(0.05)
+  peak.current = Math.max(raw, peak.current * 0.985, 0.05)
+  const level = Math.max(0, Math.min(1, (raw / peak.current - 0.3) / 0.7))
+  const pulse = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    const step = Animated.timing(pulse, { toValue: level, duration: 70, easing: Easing.out(Easing.quad), useNativeDriver: nativeDriver })
+    step.start()
+    return () => step.stop()
+  }, [level, pulse])
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        width: size,
+        height: size,
+        borderRadius: 9999,
+        backgroundColor: "#37D6C0",
+        opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.45] }),
+        transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1.04, 1.6] }) }],
+      }}
+    />
+  )
+}
+
 function Tile({
   participant,
   width,
@@ -103,6 +131,7 @@ function Tile({
   pinned,
   compact,
   onTogglePin,
+  onToggleLocalMute,
 }: {
   participant: VoiceParticipant
   width: number
@@ -110,6 +139,7 @@ function Tile({
   pinned: boolean
   compact: boolean
   onTogglePin: () => void
+  onToggleLocalMute: () => void
 }) {
   const [hovered, setHovered] = useState(false)
   const [touched, setTouched] = useState(false)
@@ -134,6 +164,7 @@ function Tile({
   const avatarSize = Math.round(Math.max(28, Math.min(112, height * 0.38)))
   const speaking = !!participant.speaking && participant.micEnabled
   const radius = compact ? 10 : 14
+  const badgeSize = compact ? 20 : 26
 
   useEffect(() => {
     const fade = Animated.timing(speakingGlow, {
@@ -169,7 +200,10 @@ function Tile({
             <VoiceVideoTile track={participant.videoTrack!} mirrored={participant.isLocal} />
           </View>
         ) : (
-          <Avatar initials={participant.avatar} uri={participant.avatarUrl} size={avatarSize} />
+          <View style={{ alignItems: "center", justifyContent: "center" }}>
+            {speaking ? <SpeakingHalo size={avatarSize} track={participant.audioTrack} /> : null}
+            <Avatar initials={participant.avatar} uri={participant.avatarUrl} size={avatarSize} />
+          </View>
         )}
 
         <View
@@ -201,26 +235,38 @@ function Tile({
           }}
         />
 
-        {speaking ? <SpeakingIndicator compact={compact} /> : null}
-
-        {!participant.micEnabled ? (
-          <View
-            pointerEvents="none"
-            style={{
-              position: "absolute",
-              top: 8,
-              right: 8,
-              width: compact ? 20 : 26,
-              height: compact ? 20 : 26,
-              borderRadius: 9999,
-              alignItems: "center",
-              justifyContent: "center",
-              backgroundColor: "rgba(10,22,32,0.72)",
-            }}
-          >
-            <Ionicons name="mic-off" size={compact ? 11 : 14} color="#FF7F72" />
-          </View>
-        ) : null}
+        <View pointerEvents="none" style={{ position: "absolute", top: 8, right: 8, flexDirection: "row", gap: 4 }}>
+          {participant.locallyMuted ? (
+            <View
+              accessibilityLabel="Silenciado para vos"
+              style={{
+                width: badgeSize,
+                height: badgeSize,
+                borderRadius: 9999,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "rgba(10,22,32,0.72)",
+              }}
+            >
+              <Ionicons name="volume-mute" size={compact ? 11 : 14} color="#F0C24B" />
+            </View>
+          ) : null}
+          {speaking ? <SpeakingIndicator compact={compact} /> : null}
+          {!participant.micEnabled ? (
+            <View
+              style={{
+                width: badgeSize,
+                height: badgeSize,
+                borderRadius: 9999,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "rgba(10,22,32,0.72)",
+              }}
+            >
+              <Ionicons name="mic-off" size={compact ? 11 : 14} color="#FF7F72" />
+            </View>
+          ) : null}
+        </View>
 
         <View
           pointerEvents="none"
@@ -246,34 +292,66 @@ function Tile({
       </Pressable>
 
       {showControls ? (
-        <Pressable
-          onPress={() => {
-            setTouched(false)
-            onTogglePin()
-          }}
-          onHoverIn={hoverIn}
-          onHoverOut={hoverOut}
-          accessibilityLabel={pinned ? `Dejar de fijar a ${participant.name}` : `Fijar a ${participant.name}`}
-          style={{
-            position: "absolute",
-            top: 8,
-            left: 8,
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 5,
-            paddingHorizontal: compact ? 8 : 11,
-            paddingVertical: compact ? 6 : 7,
-            borderRadius: 9999,
-            backgroundColor: pinned ? "#37D6C0" : "rgba(10,22,32,0.82)",
-          }}
-        >
-          <Ionicons name={pinned ? "pin" : "pin-outline"} size={14} color={pinned ? "#04211D" : "#E6F3F3"} />
-          {compact ? null : (
-            <Text style={{ color: pinned ? "#04211D" : "#E6F3F3", fontSize: 11.5, fontWeight: "700" }}>
-              {pinned ? "Dejar de fijar" : "Fijar"}
-            </Text>
+        <View style={{ position: "absolute", top: 8, left: 8, flexDirection: "row", gap: 6 }}>
+          <Pressable
+            onPress={() => {
+              setTouched(false)
+              onTogglePin()
+            }}
+            onHoverIn={hoverIn}
+            onHoverOut={hoverOut}
+            accessibilityLabel={pinned ? `Dejar de fijar a ${participant.name}` : `Fijar a ${participant.name}`}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 5,
+              paddingHorizontal: compact ? 8 : 11,
+              paddingVertical: compact ? 6 : 7,
+              borderRadius: 9999,
+              backgroundColor: pinned ? "#37D6C0" : "rgba(10,22,32,0.82)",
+            }}
+          >
+            <Ionicons name={pinned ? "pin" : "pin-outline"} size={14} color={pinned ? "#04211D" : "#E6F3F3"} />
+            {compact ? null : (
+              <Text style={{ color: pinned ? "#04211D" : "#E6F3F3", fontSize: 11.5, fontWeight: "700" }}>
+                {pinned ? "Dejar de fijar" : "Fijar"}
+              </Text>
+            )}
+          </Pressable>
+          {participant.isLocal ? null : (
+            <Pressable
+              onPress={() => {
+                setTouched(false)
+                onToggleLocalMute()
+              }}
+              onHoverIn={hoverIn}
+              onHoverOut={hoverOut}
+              accessibilityLabel={
+                participant.locallyMuted ? `Volver a escuchar a ${participant.name}` : `Silenciar a ${participant.name} para vos`
+              }
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 5,
+                paddingHorizontal: compact ? 8 : 11,
+                paddingVertical: compact ? 6 : 7,
+                borderRadius: 9999,
+                backgroundColor: participant.locallyMuted ? "#F0C24B" : "rgba(10,22,32,0.82)",
+              }}
+            >
+              <Ionicons
+                name={participant.locallyMuted ? "volume-high" : "volume-mute"}
+                size={14}
+                color={participant.locallyMuted ? "#2A1F00" : "#E6F3F3"}
+              />
+              {compact ? null : (
+                <Text style={{ color: participant.locallyMuted ? "#2A1F00" : "#E6F3F3", fontSize: 11.5, fontWeight: "700" }}>
+                  {participant.locallyMuted ? "Volver a escuchar" : "Silenciar para mí"}
+                </Text>
+              )}
+            </Pressable>
           )}
-        </Pressable>
+        </View>
       ) : null}
     </View>
   )
@@ -477,11 +555,13 @@ export default function VoiceStage({
   layout,
   pinnedId,
   onTogglePin,
+  onToggleLocalMute,
 }: {
   participants: VoiceParticipant[]
   layout: VoiceLayout
   pinnedId: string | null
   onTogglePin: (id: string) => void
+  onToggleLocalMute: (id: string) => void
 }) {
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [ghosts, setGhosts] = useState<StageItem[]>([])
@@ -552,6 +632,7 @@ export default function VoiceStage({
                 compact={item.compact}
                 pinned={item.participant.id === pinned}
                 onTogglePin={() => onTogglePin(item.participant!.id)}
+                onToggleLocalMute={() => onToggleLocalMute(item.participant!.id)}
               />
             ) : (
               <OverflowTile hidden={item.hidden ?? []} height={item.frame.h} />
